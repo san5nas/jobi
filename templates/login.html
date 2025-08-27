@@ -1,0 +1,10 @@
+<form method="post">
+    {% csrf_token %}
+    <input type="text" name="username" placeholder="Username ან Email" required>
+    <input type="password" name="password" placeholder="Password" required>
+    <button type="submit">შესვლა</button>
+
+    {% if error %}
+        <p style="color:red">{{ error }}</p>
+    {% endif %}
+</form>

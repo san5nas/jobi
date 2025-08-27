@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+  <meta charset="utf-8">
+  <title>ინვოისი {{ invoice.invoice_number }}</title>
+  <style>
+    /* ყურადღება: ძირითადი ფონტის კავშირი კეთდება views.py-დან
+       (WeasyPrint CSS) ან fallback-ისას ზემოდან ჩაწერილი <style> */
+    h1, h2, h3 { margin: 0 0 8px; }
+    .muted { opacity: .75; }
+    .mt-8 { margin-top: 8px; }
+    .mb-8 { margin-bottom: 8px; }
+    .row { display: block; margin-bottom: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 6px; }
+  </style>
+</head>
+<body>
+  <h1>ინვოისი № {{ invoice.invoice_number }}</h1>
+  <div class="row muted">თარიღი: {{ invoice.created_at|date:"Y-m-d" }}</div>
+  <div class="row">მომხმარებელი: {{ invoice.user.username }}</div>
+  <div class="row">თანხა: {{ invoice.amount }}</div>
+  <div class="row">სტატუსი: {% if invoice.is_paid %}გადახდილია{% else %}გადასახდელია{% endif %}</div>
+
+  <!-- აქ შეგიძლია ჩაამატო დეტალების ცხრილი, თუ გაქვს -->
+  <!--
+  <table class="mt-8">
+    <thead>
+      <tr>
+        <th>აღწერა</th>
+        <th>ღირებულება</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>სერვისი X</td>
+        <td>{{ invoice.amount }}</td>
+      </tr>
+    </tbody>
+  </table>
+  -->
+
+  <p class="mt-8 muted">მადლობა, რომ სარგებლობთ ჩვენი პლატფორმით.</p>
+</body>
+</html>
