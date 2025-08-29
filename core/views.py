@@ -1,8 +1,13 @@
-from rest_framework import generics, permissions
-from rest_framework.response import Response
+from django.shortcuts import get_object_or_404, render, redirect
 from django.http import HttpResponse
 from django.template.loader import render_to_string
-from django.shortcuts import get_object_or_404, render, redirect
+
+from rest_framework import generics, permissions
+from rest_framework.response import Response
+from rest_framework.decorators import api_view
+from rest_framework.exceptions import PermissionDenied
+
+from django.contrib.auth import authenticate, login
 
 from .models import (
     User, Vacancy, Application, EmployerProfile, Category, Invoice,
@@ -18,13 +23,13 @@ from .serializers import (
     LanguageSerializer,
     EmployerProfileSerializer,
     EmailTokenObtainPairSerializer,
+    InvoiceSerializer,
 )
 from .permissions import IsEmployer, IsAdmin, IsJobSeeker, CanEditVacancy, CanUpdateApplicationStatus
 
-# --- NEW: JWT email login view ---
+# --- JWT email login view ---
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django.contrib.auth import authenticate, login
-from rest_framework.decorators import api_view
+
 
 @api_view(['GET'])
 def api_root(request):
@@ -42,42 +47,80 @@ def api_root(request):
     })
 
 
-# CUSTOM LOGIN
+# --- Session-based custom login (ბრაუზერის ფორმისთვის; API-სთვის გამოიყენე JWT) ---
 def custom_login(request):
     """
-    Login with username or email
+    Login with username or email (session auth).
+    API-სთვის გამოიყენე /api/token/ ან /api/token/email/
     """
     if request.method == "POST":
         username_or_email = request.POST.get("username")
         password = request.POST.get("password")
 
-        # Authenticate using custom backend
         user = authenticate(request, username=username_or_email, password=password)
-
         if user is not None:
             login(request, user)
-            return redirect("home")
+            return redirect("api-root")
         else:
             return render(request, "login.html", {"error": "არასწორი მონაცემები"})
-
     return render(request, "login.html")
+
 
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
 
-# CATEGORY CREATE (Admin)
+
+# ---------- Categories ----------
 class CategoryCreateView(generics.CreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAdmin]
 
-# REGISTER USER
+
+class CategoryListView(generics.ListAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [permissions.AllowAny]
+
+
+# ---------- Users / Profiles ----------
 class RegisterUserView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [permissions.AllowAny]
 
-# VACANCIES LIST
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
+class JobSeekerProfileView(generics.RetrieveUpdateAPIView):
+    queryset = JobSeekerProfile.objects.all()
+    serializer_class = JobSeekerProfileSerializer
+    permission_classes = [IsJobSeeker]
+
+    def get_object(self):
+        return get_object_or_404(JobSeekerProfile, user=self.request.user)
+
+
+class JobSeekerListView(generics.ListAPIView):
+    queryset = User.objects.filter(user_type='job_seeker')
+    serializer_class = UserSerializer
+    permission_classes = [IsEmployer]
+
+
+class LanguageListView(generics.ListAPIView):
+    queryset = Language.objects.all()
+    serializer_class = LanguageSerializer
+    permission_classes = [permissions.AllowAny]
+
+
+# ---------- Vacancies ----------
 class VacancyListView(generics.ListAPIView):
     serializer_class = VacancySerializer
     permission_classes = [permissions.AllowAny]
@@ -94,26 +137,34 @@ class VacancyListView(generics.ListAPIView):
             queryset = queryset.filter(location__icontains=location)
         if q:
             queryset = queryset.filter(title__icontains=q)
-        
+
         return queryset
 
-# VACANCY DETAIL
+
 class VacancyDetailView(generics.RetrieveAPIView):
     queryset = Vacancy.objects.all()
     serializer_class = VacancySerializer
     permission_classes = [permissions.AllowAny]
 
-# VACANCY CREATE
+
 class VacancyCreateView(generics.CreateAPIView):
     queryset = Vacancy.objects.all()
     serializer_class = VacancyCreateSerializer
     permission_classes = [IsEmployer]
 
     def perform_create(self, serializer):
-        employer_profile = EmployerProfile.objects.get(user=self.request.user)
-        serializer.save(employer=employer_profile, is_published=True)
+        employer_profile = get_object_or_404(EmployerProfile, user=self.request.user)
 
-# MY VACANCIES
+        # მოთხოვნა: Pending დამსაქმებელს არ ჰქონდეს რესურსების გამოქვეყნება
+        if not employer_profile.is_approved_by_admin:
+            raise PermissionDenied("თქვენი პროფილი ელოდება ადმინის დადასტურებას.")
+
+        # სურვილისამებრ: ახალი ვაკანსია შეიძლება იყოს Pending (მოდერაცია)
+        vacancy = serializer.save(employer=employer_profile, is_published=False)
+        # აქ შეგიძლია დაამატო ელფოსტის გაგზავნა admin-სთვის/დამსაქმებლისთვის
+        return vacancy
+
+
 class MyVacancyListView(generics.ListAPIView):
     serializer_class = VacancySerializer
     permission_classes = [IsEmployer]
@@ -122,7 +173,7 @@ class MyVacancyListView(generics.ListAPIView):
         employer_profile = get_object_or_404(EmployerProfile, user=self.request.user)
         return Vacancy.objects.filter(employer=employer_profile).order_by('-published_date')
 
-# VACANCY UPDATE/DELETE
+
 class VacancyUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Vacancy.objects.all()
     serializer_class = VacancySerializer
@@ -132,7 +183,8 @@ class VacancyUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
         instance.is_published = False
         instance.save()
 
-# APPLICATION CREATE
+
+# ---------- Applications ----------
 class ApplicationCreateView(generics.CreateAPIView):
     queryset = Application.objects.all()
     serializer_class = ApplicationSerializer
@@ -141,7 +193,7 @@ class ApplicationCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         serializer.save(job_seeker=self.request.user)
 
-# MY APPLICATIONS
+
 class MyApplicationsListView(generics.ListAPIView):
     serializer_class = ApplicationSerializer
     permission_classes = [IsJobSeeker]
@@ -149,54 +201,20 @@ class MyApplicationsListView(generics.ListAPIView):
     def get_queryset(self):
         return Application.objects.filter(job_seeker=self.request.user).order_by('-applied_at')
 
-# APPLICATION STATUS UPDATE
+
 class ApplicationUpdateStatusView(generics.UpdateAPIView):
     queryset = Application.objects.all()
     serializer_class = ApplicationSerializer
     permission_classes = [CanUpdateApplicationStatus]
 
-# CATEGORY LIST
-class CategoryListView(generics.ListAPIView):
-    queryset = Category.objects.all()
-    serializer_class = CategorySerializer
-    permission_classes = [permissions.AllowAny]
 
-# JOB SEEKER LIST
-class JobSeekerListView(generics.ListAPIView):
-    queryset = User.objects.filter(user_type='job_seeker')
-    serializer_class = UserSerializer
-    permission_classes = [IsEmployer]
-
-# INVOICE HTML GENERATE
+# ---------- Invoices ----------
 class GenerateInvoiceView(generics.RetrieveAPIView):
     queryset = Invoice.objects.all()
+    serializer_class = InvoiceSerializer  # ← ეს აკლდა და WARNING-ს ყრიდა
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         context = {'invoice': instance}
         html_string = render_to_string('invoice_template.html', context)
         return HttpResponse(html_string, content_type='text/html')
-
-# USER PROFILE
-class UserProfileView(generics.RetrieveUpdateAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_object(self):
-        return self.request.user
-
-# JOB SEEKER PROFILE
-class JobSeekerProfileView(generics.RetrieveUpdateAPIView):
-    queryset = JobSeekerProfile.objects.all()
-    serializer_class = JobSeekerProfileSerializer
-    permission_classes = [IsJobSeeker]
-    
-    def get_object(self):
-        return get_object_or_404(JobSeekerProfile, user=self.request.user)
-
-# LANGUAGE LIST
-class LanguageListView(generics.ListAPIView):
-    queryset = Language.objects.all()
-    serializer_class = LanguageSerializer
-    permission_classes = [permissions.AllowAny]

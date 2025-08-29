@@ -1,4 +1,5 @@
 import re
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -7,8 +8,8 @@ from .models import (
     User, EmployerProfile, Vacancy, Application, Service, PurchasedService,
     Invoice, Category, JobSeekerProfile, Language, WorkExperience
 )
-from django.contrib.auth.password_validation import validate_password
 
+# ---------- Nested serializers ----------
 
 class LanguageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -30,12 +31,28 @@ class JobSeekerProfileSerializer(serializers.ModelSerializer):
         model = JobSeekerProfile
         fields = ['video_resume', 'education', 'diploma_upload', 'languages', 'work_experiences']
 
+    def create(self, validated_data):
+        languages_data = validated_data.pop('languages', [])
+        work_experiences_data = validated_data.pop('work_experiences', [])
+        job_seeker_profile = JobSeekerProfile.objects.create(**validated_data)
+
+        for lang_data in languages_data:
+            language, _ = Language.objects.get_or_create(name=lang_data['name'])
+            job_seeker_profile.languages.add(language)
+
+        for experience_data in work_experiences_data:
+            WorkExperience.objects.create(job_seeker_profile=job_seeker_profile, **experience_data)
+
+        return job_seeker_profile
+
 
 class EmployerProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmployerProfile
         fields = ['company_name', 'contact_person', 'is_approved_by_admin']
 
+
+# ---------- User serializer ----------
 
 class UserSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(
@@ -44,10 +61,8 @@ class UserSerializer(serializers.ModelSerializer):
     )
     username = serializers.CharField(required=False, allow_blank=True)
     password = serializers.CharField(write_only=True)
-
-    # პროფილები serialize-ისთვის, მაგრამ შექმნა serializer-ში აღარ მოხდება
-    job_seeker_profile = JobSeekerProfileSerializer(required=False, read_only=True)
-    employer_profile = EmployerProfileSerializer(required=False, read_only=True)
+    job_seeker_profile = JobSeekerProfileSerializer(required=False)
+    employer_profile = EmployerProfileSerializer(required=False)
 
     class Meta:
         model = User
@@ -58,7 +73,7 @@ class UserSerializer(serializers.ModelSerializer):
         ]
 
     def _generate_username_from_email(self, email: str) -> str:
-        base = (email.split('@')[0] or 'user')[:150]  # AbstractUser.username max_length=150
+        base = (email.split('@')[0] or 'user')[:150]
         candidate = base
         i = 0
         while User.objects.filter(username=candidate).exists():
@@ -73,13 +88,20 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        # username email-იდან
+        """
+        მნიშვნელოვანი: თუ სადმე signals / post_save ავტომატურად ქმნის პროფილებს,
+        აქ დამატებით აღარ ვქმნით. ვაკეთებთ მხოლოდ get_or_create-ს, რომ
+        UNIQUE constraint შეცდომა არ მივიღოთ.
+        """
+        job_seeker_profile_data = validated_data.pop('job_seeker_profile', None)
+        employer_profile_data = validated_data.pop('employer_profile', None)
+
         username = validated_data.get('username')
         email = validated_data.get('email')
         if not username or not username.strip():
             validated_data['username'] = self._generate_username_from_email(email)
 
-        # ვქმნით User-ს
+        # მომხმარებელი
         user = User.objects.create_user(
             username=validated_data['username'],
             email=email,
@@ -88,11 +110,36 @@ class UserSerializer(serializers.ModelSerializer):
             phone_number=validated_data.get('phone_number')
         )
 
-        # ❌ აქ პროფილებს აღარ ვამატებთ
-        # signals იზრუნებს JobSeekerProfile/EmployerProfile-ის შექმნაზე
+        # პროფილები — მხოლოდ შესაბამისი ტიპისთვის და უსაფრთხოდ
+        if user.user_type == 'job_seeker':
+            profile, _ = JobSeekerProfile.objects.get_or_create(user=user)
+            if job_seeker_profile_data:
+                languages_data = job_seeker_profile_data.pop('languages', [])
+                work_experiences_data = job_seeker_profile_data.pop('work_experiences', [])
 
+                # განახლება/შევსება
+                for key, val in job_seeker_profile_data.items():
+                    setattr(profile, key, val)
+                profile.save()
+
+                for lang_data in languages_data:
+                    language, _ = Language.objects.get_or_create(name=lang_data['name'])
+                    profile.languages.add(language)
+                for experience_data in work_experiences_data:
+                    WorkExperience.objects.create(job_seeker_profile=profile, **experience_data)
+
+        elif user.user_type == 'employer':
+            profile, created = EmployerProfile.objects.get_or_create(user=user)
+            if employer_profile_data:
+                for key, val in employer_profile_data.items():
+                    setattr(profile, key, val)
+                profile.save()
+
+        # სხვა ტიპებისთვის არაფერი დამატებითი
         return user
 
+
+# ---------- Business models serializers ----------
 
 class VacancySerializer(serializers.ModelSerializer):
     class Meta:
@@ -138,4 +185,5 @@ class CategorySerializer(serializers.ModelSerializer):
 
 # ---- JWT Email Login Serializer ----
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
+    # SimpleJWT-ს ვუთხრათ, რომ username-ის ნაცვლად email გამოიყენოს
     username_field = 'email'
