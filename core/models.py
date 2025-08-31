@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db.models import JSONField
 from django.conf import settings
 
+
 class User(AbstractUser):
     USER_TYPE_CHOICES = (
         ("admin", "ადმინისტრატორი"),
@@ -16,7 +17,7 @@ class User(AbstractUser):
     user_type = models.CharField(max_length=20, choices=USER_TYPE_CHOICES)
     phone_number = models.CharField(max_length=20, unique=True, blank=True, null=True)
     is_verified = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=False) 
+    is_active = models.BooleanField(default=True)
 
     groups = models.ManyToManyField(
         'auth.Group',

@@ -4,19 +4,23 @@ from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-^1v&!+m!0t@t!2_v*1d5x-e-v*8d5c4e-d-v*4d2f-4e'
-DEBUG = True
-ALLOWED_HOSTS = []
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-dev-key')
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
+
+# დეფოლტად localhost-ები
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
 INSTALLED_APPS = [
-    'core.apps.CoreConfig',
-
-    # DRF / Docs
+    # მესამე მხარე/აპები
+    'corsheaders',
     'rest_framework',
+    'rest_framework.authtoken',
     'rest_framework_simplejwt',
     'drf_spectacular',
-    # სურვილისამებრ შეგიძლია დატოვო drf_yasg, მაგრამ სქემა უკვე spectacular-ით იაგება
     'drf_yasg',
+
+    # საკუთარი აპი
+    'core.apps.CoreConfig',
 
     # Django core
     'django.contrib.admin',
@@ -28,6 +32,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # ძალიან ზემოთ
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -104,9 +109,28 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 
-# სურვილისამებრ: Spectacular კონფიგი (სქემისთვის მეტა-ინფო)
+# Spectacular meta
 SPECTACULAR_SETTINGS = {
     "TITLE": "Jobify API",
     "DESCRIPTION": "Jobify პლატფორმის REST API",
     "VERSION": "0.1.0",
 }
+
+# ----------------------
+# Email / Admin settings
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'jobify@gmail.com')  # გამგზავნი
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'შენი app password')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'aleksandregoguadze@gmail.com')
+
+# Frontend domain for verification links
+FRONTEND_HOST = os.environ.get('FRONTEND_HOST', 'http://127.0.0.1:8000')
+
+# CORS/CSRF (dev-friendly)
+CORS_ALLOW_ALL_ORIGINS = True
+CSRF_TRUSTED_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000']

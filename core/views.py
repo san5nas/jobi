@@ -1,13 +1,18 @@
 from django.shortcuts import get_object_or_404, render, redirect
 from django.http import HttpResponse
 from django.template.loader import render_to_string
+from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from rest_framework.exceptions import PermissionDenied
 
 from django.contrib.auth import authenticate, login
+from django.core.mail import send_mail
+from django.conf import settings
+
+import jwt
 
 from .models import (
     User, Vacancy, Application, EmployerProfile, Category, Invoice,
@@ -26,16 +31,26 @@ from .serializers import (
     InvoiceSerializer,
 )
 from .permissions import IsEmployer, IsAdmin, IsJobSeeker, CanEditVacancy, CanUpdateApplicationStatus
+from .utils import send_verification_email
 
 # --- JWT email login view ---
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 
+# ===========================
+# API ROOT
+# ===========================
 @api_view(['GET'])
 def api_root(request):
     return Response({
-        "login": "/api/login/",
+        "login (HTML form)": "/api/login/",
+        "login (API/JWT)": "/api/login/  [POST JSON: {email, password}]",
+        "token obtain (username)": "/api/token/",
+        "token obtain (email)": "/api/token/email/",
+        "token refresh": "/api/token/refresh/",
         "register": "/api/register/",
+        "verify-email": "/api/verify-email/?token=...",
         "profile": "/api/profile/",
         "vacancies": "/api/vacancies/",
         "applications": "/api/applications/",
@@ -47,11 +62,38 @@ def api_root(request):
     })
 
 
-# --- Session-based custom login (ბრაუზერის ფორმისთვის; API-სთვის გამოიყენე JWT) ---
+# ===========================
+# AUTH / LOGIN
+# ===========================
+class EmailTokenObtainPairView(TokenObtainPairView):
+    serializer_class = EmailTokenObtainPairSerializer
+
+
+@csrf_exempt           # ← CSRF არაა საჭირო API-დან ავტენტიკაციისას
+@api_view(['POST'])
+def api_login(request):
+    """
+    API Login — გამოიყენე Postman-იდან:
+    POST /api/login/
+    Body (JSON): {"email": "...", "password": "..."}
+    Response: {"refresh": "...", "access": "..."}
+    """
+    email = request.data.get('email')
+    password = request.data.get('password')
+    user = authenticate(request, username=email, password=password)
+    if user:
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+        })
+    return Response({"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+
+
 def custom_login(request):
     """
-    Login with username or email (session auth).
-    API-სთვის გამოიყენე /api/token/ ან /api/token/email/
+    Browser session login HTML ფორმით (CSRF აუცილებელია).
+    Template: templates/login.html
     """
     if request.method == "POST":
         username_or_email = request.POST.get("username")
@@ -66,11 +108,9 @@ def custom_login(request):
     return render(request, "login.html")
 
 
-class EmailTokenObtainPairView(TokenObtainPairView):
-    serializer_class = EmailTokenObtainPairSerializer
-
-
-# ---------- Categories ----------
+# ===========================
+# CATEGORIES
+# ===========================
 class CategoryCreateView(generics.CreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
@@ -83,11 +123,21 @@ class CategoryListView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
 
-# ---------- Users / Profiles ----------
+# ===========================
+# USERS / PROFILES
+# ===========================
 class RegisterUserView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [permissions.AllowAny]
+
+    def perform_create(self, serializer):
+        # მომხმარებელი იქმნება; email-ის ვერიფიკაციის ბმული იგზავნება
+        user = serializer.save()
+        try:
+            send_verification_email(user)
+        except Exception:
+            pass
 
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
@@ -120,7 +170,42 @@ class LanguageListView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
 
-# ---------- Vacancies ----------
+# ===========================
+# EMAIL VERIFICATION
+# ===========================
+@api_view(['GET'])
+def verify_email(request):
+    token = request.GET.get('token')
+    if not token:
+        return Response({"detail": "Token missing"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        user_id = payload.get('user_id')
+        user = User.objects.get(pk=user_id)
+    except (jwt.ExpiredSignatureError, jwt.DecodeError, User.DoesNotExist):
+        return Response({"detail": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.is_verified = True
+    user.is_active = True
+    user.save()
+
+    try:
+        send_mail(
+            subject="Your account is verified",
+            message=f"Hi {user.username}, your account is now verified and active.",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
+    return Response({"detail": "Email verified successfully"}, status=status.HTTP_200_OK)
+
+
+# ===========================
+# VACANCIES
+# ===========================
 class VacancyListView(generics.ListAPIView):
     serializer_class = VacancySerializer
     permission_classes = [permissions.AllowAny]
@@ -155,13 +240,38 @@ class VacancyCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         employer_profile = get_object_or_404(EmployerProfile, user=self.request.user)
 
-        # მოთხოვნა: Pending დამსაქმებელს არ ჰქონდეს რესურსების გამოქვეყნება
+        # Pending employers cannot post
         if not employer_profile.is_approved_by_admin:
             raise PermissionDenied("თქვენი პროფილი ელოდება ადმინის დადასტურებას.")
 
-        # სურვილისამებრ: ახალი ვაკანსია შეიძლება იყოს Pending (მოდერაცია)
+        # Save vacancy as unpublished (Pending moderation)
         vacancy = serializer.save(employer=employer_profile, is_published=False)
-        # აქ შეგიძლია დაამატო ელფოსტის გაგზავნა admin-სთვის/დამსაქმებლისთვის
+
+        # Notify admin about new vacancy (email)
+        admin_emails = []
+        if getattr(settings, 'ADMIN_EMAIL', None):
+            admin_emails = [e.strip() for e in settings.ADMIN_EMAIL.split(',') if e.strip()]
+
+        if admin_emails:
+            subject = "New vacancy created (pending moderation)"
+            message = f"Employer: {employer_profile.company_name}\nVacancy: {vacancy.title}\nLocation: {vacancy.location}"
+            try:
+                send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, admin_emails, fail_silently=True)
+            except Exception:
+                pass
+
+        # Notify employer
+        try:
+            send_mail(
+                subject="Your vacancy is pending moderation",
+                message=f"Your vacancy '{vacancy.title}' is submitted and awaiting admin approval.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[employer_profile.user.email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
         return vacancy
 
 
@@ -179,12 +289,48 @@ class VacancyUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = VacancySerializer
     permission_classes = [CanEditVacancy]
 
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        critical_fields = {'title', 'description', 'requirements', 'min_salary', 'location', 'vacancy_type'}
+
+        updated_data = serializer.validated_data
+        critical_changed = False
+        changed_fields_list = []
+        for field in critical_fields:
+            if field in updated_data:
+                old_value = getattr(instance, field)
+                new_value = updated_data.get(field)
+                if old_value != new_value:
+                    critical_changed = True
+                    changed_fields_list.append(field)
+
+        updated_instance = serializer.save()
+        if critical_changed:
+            updated_instance.is_published = False
+            updated_instance.save()
+            admin_emails = []
+            if getattr(settings, 'ADMIN_EMAIL', None):
+                admin_emails = [e.strip() for e in settings.ADMIN_EMAIL.split(',') if e.strip()]
+            if admin_emails:
+                subject = "Vacancy requires re-moderation"
+                message = (
+                    f"Vacancy '{updated_instance.title}' edited by employer "
+                    f"'{updated_instance.employer.company_name}'. Changed fields: {', '.join(changed_fields_list)}. "
+                    "The vacancy has been set to unpublished (pending)."
+                )
+                try:
+                    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, admin_emails, fail_silently=True)
+                except Exception:
+                    pass
+
     def perform_destroy(self, instance):
         instance.is_published = False
         instance.save()
 
 
-# ---------- Applications ----------
+# ===========================
+# APPLICATIONS
+# ===========================
 class ApplicationCreateView(generics.CreateAPIView):
     queryset = Application.objects.all()
     serializer_class = ApplicationSerializer
@@ -208,10 +354,12 @@ class ApplicationUpdateStatusView(generics.UpdateAPIView):
     permission_classes = [CanUpdateApplicationStatus]
 
 
-# ---------- Invoices ----------
+# ===========================
+# INVOICES
+# ===========================
 class GenerateInvoiceView(generics.RetrieveAPIView):
     queryset = Invoice.objects.all()
-    serializer_class = InvoiceSerializer  # ← ეს აკლდა და WARNING-ს ყრიდა
+    serializer_class = InvoiceSerializer
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
