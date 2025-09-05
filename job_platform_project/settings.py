@@ -4,6 +4,21 @@ from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_SECRET = os.environ.get('GOOGLE_SECRET', '')
+GOOGLE_CLIENT_SECRET = GOOGLE_SECRET
+
+GOOGLE_OAUTH_REDIRECT = os.environ.get('GOOGLE_OAUTH_REDIRECT')
+
+
+# Google OAuth2 გასაღებები (გარემოს ცვლადებიდან)
+SOCIAL_AUTH_GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+SOCIAL_AUTH_GOOGLE_SECRET = os.environ.get('GOOGLE_SECRET', '')
+
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-dev-key')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
@@ -18,6 +33,12 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'drf_spectacular',
     'drf_yasg',
+    # google ით შესასვლელად
+    'django.contrib.sites',  # საჭიროა allauth-ისთვის
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
 
     # საკუთარი აპი
     'core.apps.CoreConfig',
@@ -35,6 +56,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # ძალიან ზემოთ
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'allauth.account.middleware.AccountMiddleware',  # დაამატე აქ
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -83,7 +105,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
-STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
+# STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'core.User'
@@ -94,8 +116,20 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.AllowAny',),
+        'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
     ),
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_FILTER_BACKENDS': [
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
 }
 
 SIMPLE_JWT = {
@@ -103,18 +137,19 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
 }
 
-# Username ან Email-ით ავტორიზაცია (custom backend)
-AUTHENTICATION_BACKENDS = [
-    'core.backends.UsernameOrEmailBackend',
-    'django.contrib.auth.backends.ModelBackend',
-]
-
 # Spectacular meta
 SPECTACULAR_SETTINGS = {
     "TITLE": "Jobify API",
     "DESCRIPTION": "Jobify პლატფორმის REST API",
     "VERSION": "0.1.0",
+    "SECURITY": [{"BearerAuth": []}],
+    "COMPONENTS": {
+        "securitySchemes": {
+            "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
+        }
+    },
 }
+
 
 # ----------------------
 # Email / Admin settings
@@ -122,8 +157,8 @@ EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'jobify@gmail.com')  # გამგზავნი
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'შენი app password')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'aleksandregoguadze2@gmail.com')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'vvppmlbqvefmtbfq')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'aleksandregoguadze@gmail.com')
@@ -134,3 +169,20 @@ FRONTEND_HOST = os.environ.get('FRONTEND_HOST', 'http://127.0.0.1:8000')
 # CORS/CSRF (dev-friendly)
 CORS_ALLOW_ALL_ORIGINS = True
 CSRF_TRUSTED_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000']
+
+SITE_ID = 1  # django.contrib.sites-ისთვის
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+]
+
+# allauth-ის პარამეტრები
+ACCOUNT_LOGIN_METHODS = {'email', 'username'}
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+ACCOUNT_DEFAULT_HTTP_REDIRECT_URL = '/accounts/login/'
+
+# შესვლის შემდეგ სად უნდა გადავიდეს
+LOGIN_URL = '/accounts/login/'
+LOGIN_REDIRECT_URL = '/api/dashboard/'
+ACCOUNT_LOGOUT_REDIRECT_URL = '/accounts/login/'

@@ -5,9 +5,11 @@ from .models import (
     Invoice, Category, JobSeekerProfile, Language, WorkExperience, AdminProfile
 )
 from django import forms
-import json
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
-
+from .models import MyVacancy
+from django.urls import path
+from django.shortcuts import redirect
+from django.utils.text import slugify
 # --- ნაბიჯი 1: მორგებული ფორმები ---
 class CustomUserCreationForm(UserCreationForm):
     full_name = forms.CharField(label="Full name", max_length=255, required=False)
@@ -60,14 +62,12 @@ class CustomUserChangeForm(UserChangeForm):
             user.save()
         return user
 
-
 # UserAdmin-ის სტანდარტული fieldsets-ის კოპირება და მოდიფიცირება
 MyUserAdminFieldsets = list(UserAdmin.fieldsets)
 permissions_fields = list(MyUserAdminFieldsets[2][1]['fields'])
 permissions_fields.remove('is_staff') 
 MyUserAdminFieldsets[2][1]['fields'] = tuple(permissions_fields)
 MyUserAdminFieldsets[2] = MyUserAdminFieldsets[2]
-
 
 class WorkExperienceInline(admin.TabularInline):
     model = WorkExperience
@@ -90,18 +90,24 @@ class AdminProfileInline(admin.StackedInline):
 
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
-    # --- ნაბიჯი 2: მორგებული ფორმების გამოყენება ---
     form = CustomUserChangeForm
     add_form = CustomUserCreationForm
     
-    # fieldsets-ის გადაწერა, რომ ჩანდეს მხოლოდ საჭირო ველები
-    # ვაშორებთ დუბლიკატებს და ვაერთიანებთ ჩვენს მორგებულ ველებს
     fieldsets = (
         (None, {'fields': ('username', 'password')}),
         ('Personal info', {'fields': ('full_name', 'email')}),
         ('Permissions', {'fields': ('is_active', 'is_superuser', 'groups', 'user_permissions')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
-        ('Custom Fields', {'fields': ('user_type', 'phone_number', 'is_verified')}),
+        ('Custom Fields', {
+            'fields': (
+                'user_type',
+                'phone_number',
+                'is_verified',
+                'google_access_token',
+                'google_refresh_token',
+                'google_token_expiry',
+            )
+        }),
     )
 
     add_fieldsets = (
@@ -127,10 +133,6 @@ class CustomUserAdmin(UserAdmin):
         return []
 
     def save_model(self, request, obj, form, change):
-        """
-        ავტომატურად რთავს is_staff-ს, როდესაც is_active მონიშნულია.
-        ეს ლოგიკა ვრცელდება ყველა მომხმარებელზე.
-        """
         obj.is_staff = obj.is_active
         super().save_model(request, obj, form, change)
 
@@ -150,18 +152,92 @@ class JobSeekerProfileAdmin(admin.ModelAdmin):
     list_display = ('user',)
     inlines = [WorkExperienceInline]
 
-class VacancyInline(admin.TabularInline):
-    model = Vacancy
+
+class ApplicationInline(admin.TabularInline):
+    model = Application
     extra = 0
+    readonly_fields = ('job_seeker', 'cv', 'cover_letter', 'status', 'applied_at', 'interview_start', 'interview_end')
+    can_delete = False
+    verbose_name_plural = "განაცხადები"
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        if getattr(request.user, "user_type", "") == "employer":
+            return qs.filter(vacancy__employer__user=request.user)
+        return qs.none()
+
+@admin.register(Application)
+class ApplicationAdmin(admin.ModelAdmin):
+    list_display = ("id", "vacancy", "job_seeker", "status", "applied_at", "interview_start", "interview_end")
+    search_fields = ("vacancy__title", "job_seeker__username", "job_seeker__email")
+    list_filter = ("status",)
+
+
+@admin.register(Vacancy)
+class VacancyAdmin(admin.ModelAdmin):
+    list_display = ('title', 'employer', 'location', 'is_published', 'published_date')
+    list_filter = ('is_published', 'vacancy_type', 'category')
+    search_fields = ('title', 'employer__company_name', 'location')
+    inlines = [ApplicationInline]
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        if request.user.user_type == "employer":
+            return qs  # ❗ ხედავს ყველა ვაკანსიას
+        if request.user.user_type == "job_seeker":
+            return qs.filter(is_published=True)
+        return qs.none()
+    def get_inline_instances(self, request, obj=None):
+        if not obj:
+            return []
+        if request.user.is_superuser or request.user.user_type == "employer":
+            return super().get_inline_instances(request, obj)
+        return []
+
+
+@admin.register(MyVacancy)
+class MyVacancyAdmin(admin.ModelAdmin):
+    list_display = ('title', 'location', 'is_published', 'published_date', 'category')
+    list_filter = ('category',)
+    inlines = [ApplicationInline]
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        if request.user.user_type == "employer":
+            return qs.filter(employer__user=request.user)
+        return qs.none()
+
+    def category_view_factory(self, category):
+        def view(request):
+            request.GET = request.GET.copy()
+            request.GET['category__id__exact'] = str(category.id)
+            return self.changelist_view(request)
+        return view
+
+    def get_model_perms(self, request):
+        if request.user.is_superuser or (request.user.is_authenticated and request.user.user_type == "employer"):
+            return {"add": True, "change": True, "delete": False, "view": True}
+        return {}
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser or (request.user.is_authenticated and request.user.user_type == "employer")
+
+    def has_module_permission(self, request):
+        return request.user.is_superuser or (request.user.is_authenticated and request.user.user_type == "employer")
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ('name',)
-    search_fields = ('name',)
-    inlines = [VacancyInline]
+    list_display = ("name", "slug")
+    search_fields = ("name", "slug")
+    prepopulated_fields = {"slug": ("name",)}  
 
-admin.site.register(Vacancy)
-admin.site.register(Application)
+
 admin.site.register(Service)
 admin.site.register(PurchasedService)
 admin.site.register(Invoice)

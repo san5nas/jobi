@@ -2,9 +2,14 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.db.models import JSONField
 from django.conf import settings
-
+from django.utils import timezone
+from django.utils.text import slugify
 
 class User(AbstractUser):
+    google_access_token = models.TextField(blank=True, null=True)
+    google_refresh_token = models.TextField(blank=True, null=True)
+    google_token_expiry = models.DateTimeField(blank=True, null=True)
+    
     USER_TYPE_CHOICES = (
         ("admin", "ადმინისტრატორი"),
         ("job_seeker", "სამუშაოს მაძიებელი"),
@@ -74,11 +79,20 @@ class Language(models.Model):
     def __str__(self):
         return self.name
 
+
+
 class Category(models.Model):
-    name = models.CharField(max_length=100, unique=True)
-    
+    name = models.CharField(max_length=255, unique=True)
+    slug = models.SlugField(unique=True, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
+
 
 class Vacancy(models.Model):
     VACANCY_TYPES = (
@@ -103,6 +117,9 @@ class Vacancy(models.Model):
         return self.title
 
 class Application(models.Model):
+
+    applied_at = models.DateTimeField(auto_now_add=True)
+   
     APPLICATION_STATUSES = (
         ("new", "ახალი"),
         ("reviewed", "განხილული"),
@@ -117,6 +134,11 @@ class Application(models.Model):
     status = models.CharField(max_length=20, choices=APPLICATION_STATUSES, default="new")
     applied_at = models.DateTimeField(auto_now_add=True)
     
+    interview_link = models.URLField(blank=True, null=True)
+    interview_start = models.DateTimeField(blank=True, null=True)
+    interview_end = models.DateTimeField(blank=True, null=True)
+
+
     def __str__(self):
         return f"განაცხადი ვაკანსიაზე '{self.vacancy.title}' მომხმარებლისგან '{self.job_seeker.username}'"
 
@@ -147,3 +169,8 @@ class Invoice(models.Model):
     
     def __str__(self):
         return self.invoice_number
+class MyVacancy(Vacancy):
+    class Meta:
+        proxy = True
+        verbose_name = "my Vacancy"
+        verbose_name_plural = "my Vacancy"

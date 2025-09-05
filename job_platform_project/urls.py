@@ -1,3 +1,5 @@
+# job_platform_project/urls.py
+
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -7,16 +9,15 @@ from core.views import EmailTokenObtainPairView  # email-ის ველი JWT
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('accounts/', include('allauth.urls')),
 
     # Core API
-    path('api/', include('core.urls')),
+    path('api/', include('core.urls')),  # ეს ახალი
 
-    # DRF built-in login/logout (Browsable API)
-    path('api-auth/', include('rest_framework.urls')),
 
-    # JWT endpoints (ერთი ადგილი, პროექტის urls.py)
-    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),              # username+password
-    path('api/token/email/', EmailTokenObtainPairView.as_view(), name='token_obtain_pair_email'),  # email+password
+    # JWT endpoints
+    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/email/', EmailTokenObtainPairView.as_view(), name='token_obtain_pair_email'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 
     # OpenAPI schema + docs

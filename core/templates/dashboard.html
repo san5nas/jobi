@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>{{ dashboard_message }}</h1>
+
+    {% if user_type == 'admin' %}
+        <p>თქვენ შეგიძლიათ მართოთ სისტემის ყველა ელემენტი.</p>
+    {% elif user_type == 'employer' %}
+        <p>აქ იხილავთ თქვენს მიერ ატვირთულ ვაკანსიებს, აპლიკაციებს და ანგარიშებს.</p>
+    {% elif user_type == 'job_seeker' %}
+        <p>აქ შეგიძლიათ მოიძიოთ ვაკანსიები და ნახოთ თქვენი გაგზავნილი განაცხადები.</p>
+    {% endif %}
+</body>
+</html>

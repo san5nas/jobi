@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <h2>ვაკანსიები კატეგორიით: {{ category.name }}</h2>
+
+  {% if vacancies %}
+    <ul>
+      {% for vacancy in vacancies %}
+        <li><strong>{{ vacancy.title }}</strong> — {{ vacancy.location }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>ამ კატეგორიაში ვაკანსიები არ მოიძებნა.</p>
+  {% endif %}
+{% endblock %}

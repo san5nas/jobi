@@ -1,5 +1,15 @@
 from rest_framework import permissions
 
+
+class ReadOnlyOrRole(permissions.BasePermission):
+    def has_permission(self, request, view):
+        # GET/HEAD/OPTIONS ყველას
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        # წერადი ქმედებები გამკაცრდეს ობიექტური ნებართვებით (ქვემოთ ViewSet-ებში)
+        return False
+
+
 class IsEmployer(permissions.BasePermission):
     def has_permission(self, request, view):
         if request.user and request.user.is_authenticated and request.user.user_type == 'employer':

@@ -6,7 +6,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import (
     User, EmployerProfile, Vacancy, Application, Service, PurchasedService,
-    Invoice, Category, JobSeekerProfile, Language, WorkExperience
+    Invoice, Category, JobSeekerProfile, Language, WorkExperience, AdminProfile
 )
 
 # ---------- Nested serializers ----------
@@ -187,3 +187,8 @@ class CategorySerializer(serializers.ModelSerializer):
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     # SimpleJWT-ს ვუთხრათ, რომ username-ის ნაცვლად email გამოიყენოს
     username_field = 'email'
+
+class AdminProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AdminProfile
+        fields = '__all__'

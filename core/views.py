@@ -12,11 +12,12 @@ from django.contrib.auth import authenticate, login
 from django.core.mail import send_mail
 from django.conf import settings
 
+from rest_framework import viewsets
 import jwt
 
 from .models import (
     User, Vacancy, Application, EmployerProfile, Category, Invoice,
-    JobSeekerProfile, Language
+    JobSeekerProfile, Language, AdminProfile, Service, PurchasedService,
 )
 from .serializers import (
     UserSerializer,
@@ -29,13 +30,67 @@ from .serializers import (
     EmployerProfileSerializer,
     EmailTokenObtainPairSerializer,
     InvoiceSerializer,
+    AdminProfileSerializer,
+    ServiceSerializer,
+    PurchasedServiceSerializer,
+    
 )
 from .permissions import IsEmployer, IsAdmin, IsJobSeeker, CanEditVacancy, CanUpdateApplicationStatus
 from .utils import send_verification_email
 
+from .permissions import ReadOnlyOrRole
 # --- JWT email login view ---
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
+
+
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import render
+from .models import MyVacancy
+from django.http import JsonResponse
+
+
+@login_required
+def my_vacancy_by_category_api(request, category_slug):
+    category = get_object_or_404(Category, slug=category_slug)
+
+    if request.user.is_superuser:
+        qs = MyVacancy.objects.filter(category=category)
+    elif request.user.is_authenticated and request.user.user_type == 'employer':
+        qs = MyVacancy.objects.filter(category=category, employer__user=request.user)
+    else:
+        qs = MyVacancy.objects.none()
+
+    data = [{
+        "id": v.id,
+        "title": getattr(v, "title", None),
+        "location": getattr(v, "location", None),
+        "salary": getattr(v, "salary", None),
+        "created_at": v.created_at.isoformat() if hasattr(v, "created_at") else None,
+    } for v in qs]
+
+    return JsonResponse({
+        "category": {"name": category.name, "slug": category.slug},
+        "count": len(data),
+        "results": data,
+    })
+@login_required
+def dashboard_view(request):
+    user = request.user
+    context = {
+        'user_type': user.user_type,
+        'user': user,
+    }
+
+    # შეგიძლია სურვილისამებრ დაამატო სხვადსხვა ტიპის ინფო
+    if user.user_type == 'admin':
+        return render(request, 'admin_dashboard.html', context)
+    elif user.user_type == 'employer':
+        return render(request, 'employer_dashboard.html', context)
+    elif user.user_type == 'job_seeker':
+        return render(request, 'dashboard.html', context)
+    else:
+        return render(request, 'dashboard.html', {'message': 'მომხმარებლის ტიპი უცნობია.'})
 
 
 # ===========================
@@ -366,3 +421,91 @@ class GenerateInvoiceView(generics.RetrieveAPIView):
         context = {'invoice': instance}
         html_string = render_to_string('invoice_template.html', context)
         return HttpResponse(html_string, content_type='text/html')
+# core/views.py
+
+# ... დატოვეთ თქვენი არსებული იმპორტები და ხედები (views) უცვლელად ...
+# ... მაგალითად: VacancyListView, VacancyCreateView, UserProfileView და ა.შ.
+
+
+
+class AdminProfileViewSet(viewsets.ModelViewSet):
+    queryset = AdminProfile.objects.all()
+    serializer_class = AdminProfileSerializer
+    permission_classes = [IsAdmin]
+
+class EmployerProfileViewSet(viewsets.ModelViewSet):
+    queryset = EmployerProfile.objects.all()
+    serializer_class = EmployerProfileSerializer
+    permission_classes = [IsAdmin | IsEmployer]
+
+class JobSeekerProfileViewSet(viewsets.ModelViewSet):
+    queryset = JobSeekerProfile.objects.all()
+    serializer_class = JobSeekerProfileSerializer
+    permission_classes = [IsAdmin | IsJobSeeker]
+
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAdmin]
+
+class ServiceViewSet(viewsets.ModelViewSet):
+    queryset = Service.objects.all()
+    serializer_class = ServiceSerializer
+    permission_classes = [IsAdmin]
+
+class PurchasedServiceViewSet(viewsets.ModelViewSet):
+    queryset = PurchasedService.objects.all()
+    serializer_class = PurchasedServiceSerializer
+    permission_classes = [IsAdmin | IsEmployer]
+
+class InvoiceViewSet(viewsets.ModelViewSet):
+    queryset = Invoice.objects.all()
+    serializer_class = InvoiceSerializer
+    permission_classes = [IsAdmin | IsEmployer]
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [IsAdmin]
+
+class LanguageViewSet(viewsets.ModelViewSet):
+    queryset = Language.objects.all()
+    serializer_class = LanguageSerializer
+    permission_classes = [IsAdmin]
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    # GET ყველას, POST/PUT/DELETE — მხოლოდ Admin
+    permission_classes = [ReadOnlyOrRole | IsAdmin]
+
+
+class VacancyViewSet(viewsets.ModelViewSet):
+    queryset = Vacancy.objects.all()
+    serializer_class = VacancySerializer
+    # GET ყველას, წერადი — Admin ან Employer
+    permission_classes = [ReadOnlyOrRole | IsEmployer | IsAdmin]
+    search_fields = ["title", "location"]
+    ordering_fields = ["created_at", "salary", "title"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # საჯარო კითხვაზე — მხოლოდ გამოქვეყნებული
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            qs = qs.filter(is_published=True)
+
+            # ფილტრი query param-ებით
+            cat = self.request.query_params.get("category")
+            if cat:
+                qs = qs.filter(category__slug=cat)
+
+            q = self.request.query_params.get("q")
+            if q:
+                qs = qs.filter(title__icontains=q)
+
+        return qs
+
+class ApplicationViewSet(viewsets.ModelViewSet):
+    queryset = Application.objects.all()
+    serializer_class = ApplicationSerializer
+    permission_classes = [IsJobSeeker | IsAdmin]
