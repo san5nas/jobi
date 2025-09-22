@@ -9,9 +9,10 @@ import os
 
 load_dotenv()
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
-GOOGLE_SECRET = os.environ.get('GOOGLE_SECRET', '')
-GOOGLE_CLIENT_SECRET = GOOGLE_SECRET
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
 
+GOOGLE_LOGIN_REDIRECT = os.environ.get('GOOGLE_LOGIN_REDIRECT')
+GOOGLE_CALENDAR_REDIRECT = os.environ.get('GOOGLE_CALENDAR_REDIRECT',"http://127.0.0.1:8000/api/google-calendar/redirect/")
 GOOGLE_OAUTH_REDIRECT = os.environ.get('GOOGLE_OAUTH_REDIRECT')
 
 
@@ -29,10 +30,12 @@ INSTALLED_APPS = [
     # მესამე მხარე/აპები
     'corsheaders',
     'rest_framework',
+    'djoser',
     'rest_framework.authtoken',
     'rest_framework_simplejwt',
     'drf_spectacular',
     'drf_yasg',
+    'dj_rest_auth',
     # google ით შესასვლელად
     'django.contrib.sites',  # საჭიროა allauth-ისთვის
     'allauth',
@@ -99,8 +102,24 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'core.validators.PasswordComplexityValidator'},
 ]
 
+# DJOSER-ის კონფიგურაცია
+DJOSER = {
+    'PASSWORD_RESET_CONFIRM_URL': '/password/reset/confirm/{uid}/{token}',
+    'USERNAME_RESET_CONFIRM_URL': '#/username/reset/confirm/{uid}/{token}',
+    'ACTIVATION_URL': '#/activate/{uid}/{token}',
+    'SEND_ACTIVATION_EMAIL': True,
+    'SERIALIZERS': {},
+    'EMAIL': {
+        'password_reset': 'djoser.email.PasswordResetEmail',
+        'activation': 'djoser.email.ActivationEmail',
+        'password_changed_confirmation': 'djoser.email.PasswordChangedConfirmationEmail',
+        'username_reset': 'djoser.email.UsernameResetEmail',
+    }
+}
+
+
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = "Asia/Tbilisi"
 USE_I18N = True
 USE_TZ = True
 
@@ -110,14 +129,10 @@ STATIC_URL = '/static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'core.User'
 
+# settings.py
+
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',),
-        'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
@@ -127,10 +142,12 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',  # ✅ დამატებულია
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ],
 }
+
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
@@ -149,6 +166,10 @@ SPECTACULAR_SETTINGS = {
         }
     },
 }
+
+# სანამ ტესტზეა ეს იყოს
+# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+# DEFAULT_FROM_EMAIL = "noreply@jobify.local"
 
 
 # ----------------------
@@ -170,7 +191,7 @@ FRONTEND_HOST = os.environ.get('FRONTEND_HOST', 'http://127.0.0.1:8000')
 CORS_ALLOW_ALL_ORIGINS = True
 CSRF_TRUSTED_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000']
 
-SITE_ID = 1  # django.contrib.sites-ისთვის
+SITE_ID = 2   # django.contrib.sites-ისთვის
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',

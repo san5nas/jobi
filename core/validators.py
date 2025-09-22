@@ -1,3 +1,4 @@
+import os
 import re
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
@@ -32,3 +33,22 @@ class PasswordComplexityValidator:
             "მინიმუმ ერთ ლათინურ ასოს და ერთ ციფრს. "
             "ქართული ასოები დაუშვებელია."
         )
+
+
+def validate_cv_file(value):
+    ext = os.path.splitext(value.name)[1].lower()
+    valid_extensions = [".pdf", ".doc", ".docx"]
+    if ext not in valid_extensions:
+        raise ValidationError("CV უნდა იყოს მხოლოდ PDF, DOC ან DOCX ფორმატში.")
+
+def validate_video_file(value):
+    ext = os.path.splitext(value.name)[1].lower()
+    valid_extensions = [".mp4", ".avi", ".mov"]
+    if ext not in valid_extensions:
+        raise ValidationError("ვიდეო რეზიუმე უნდა იყოს მხოლოდ MP4, AVI ან MOV ფორმატში.")
+
+def validate_diploma_file(value):
+    ext = os.path.splitext(value.name)[1].lower()
+    valid_extensions = [".pdf", ".jpg", ".jpeg", ".png"]
+    if ext not in valid_extensions:
+        raise ValidationError("დიპლომი უნდა იყოს PDF ან სურათი (JPG/PNG).")

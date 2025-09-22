@@ -5,14 +5,26 @@ from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
-from core.views import EmailTokenObtainPairView  # email-ის ველი JWT-ზე
+from core.views import EmailTokenObtainPairView, verify_email_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('accounts/', include('allauth.urls')),
 
+    
     # Core API
     path('api/', include('core.urls')),  # ეს ახალი
+
+    path("api/verify-email/", verify_email_view, name="verify_email"),
+
+        # dj-rest-auth URL-ები
+    path('api/auth/', include('dj_rest_auth.urls')),
+    path('api/auth/registration/', include('dj_rest_auth.registration.urls')),
+
+    # DJOSER-ის URL-ების დამატება
+    path('api/auth/', include('djoser.urls')),
+    path('api/auth/', include('djoser.urls.authtoken')),
+    path('api/auth/', include('djoser.urls.jwt')),       
 
 
     # JWT endpoints
