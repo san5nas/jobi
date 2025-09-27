@@ -28,6 +28,7 @@ from rest_framework.exceptions import ValidationError
 from .models import (
     User, Vacancy, Application, EmployerProfile, Category, Invoice,
     JobSeekerProfile, Language, AdminProfile, Service, PurchasedService,Skill, WorkExperience, 
+    Test, TestResult,
 )
 from .serializers import (
     UserSerializer,
@@ -57,8 +58,18 @@ from .serializers import (
     LanguageEntry,
     SkillEntrySerializer,
     SkillEntry,
-    SkillEntryBulkSerializer
+    SkillEntryBulkSerializer,
+    TestSerializer,
+    TestResultSerializer,
 )
+
+
+from utils.google import create_google_form, get_form_responses,create_form_with_items
+from django.utils.dateparse import parse_datetime
+
+from .filters import JobSeekerProfileFilter
+from django_filters.rest_framework import DjangoFilterBackend
+
 
 from .permissions import IsEmployer, IsAdmin, IsJobSeeker, CanEditVacancy, CanUpdateApplicationStatus
 from .utils import send_verification_email
@@ -87,7 +98,7 @@ from django.contrib.auth import get_user_model
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 
 from django.db import models
-
+from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from .filters import VacancyFilter
@@ -198,6 +209,7 @@ class MyProfileViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["patch"], url_path="update")
     def update_self(self, request):
+        print("FILES:", request.FILES)
         prof = self._profile(request)
         ser = MyJobSeekerProfileSerializer(
             prof, data=request.data, partial=True, context={"request": request}
@@ -539,7 +551,7 @@ def verify_email(request):
     try:
         send_mail(
             subject="Your account is verified",
-            message=f"Hi {user.username}, your account is now verified and active.",
+            message=f"Hi {user.username}, your account is now verified.Please Weit for admin approval.",
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
             fail_silently=True,
@@ -569,6 +581,7 @@ class VacancyListView(generics.ListAPIView):
             queryset = queryset.filter(title__icontains=q)
 
         return queryset
+    
 
 class VacancyDetailView(generics.RetrieveAPIView):
     queryset = Vacancy.objects.all()
@@ -810,6 +823,10 @@ class JobSeekerProfileViewSet(viewsets.ModelViewSet):
     queryset = JobSeekerProfile.objects.all()
     permission_classes = [IsAdmin | IsEmployer | IsJobSeeker]
 
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = JobSeekerProfileFilter
+    search_fields = ["user__full_name", "user__email"]
+
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset().order_by('-user_id')
@@ -901,13 +918,14 @@ class VacancyViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
 
-        # საჯარო ნახვისას (GET, HEAD, OPTIONS)
-        # ვაჩვენებთ მხოლოდ იმ ვაკანსიებს, რომლებიც დამტკიცებულია ადმინის მიერ
-        # და გამოქვეყნებულია დამსაქმებლის მიერ.
         if self.request.method in ("GET", "HEAD", "OPTIONS"):
-            qs = qs.filter(is_approved=True, is_published=True)
-
-            # ... თქვენი ფილტრაციის კოდი ...
+            now = timezone.now()
+            qs = qs.filter(
+                is_approved=True,
+                is_published=True
+            ).filter(
+                Q(expiry_date__isnull=True) | Q(expiry_date__gte=now)
+            )
             cat = self.request.query_params.get("category")
             if cat:
                 qs = qs.filter(category__slug=cat)
@@ -951,7 +969,10 @@ class VacancyViewSet(viewsets.ModelViewSet):
 
         package.save()
 
-        vacancy = serializer.save(employer=employer_profile)
+        vacancy = serializer.save(
+            employer=employer_profile,
+            expiry_date=timezone.now() + timezone.timedelta(days=package.service.duration_days)
+        )
 
         # დამსაქმებელი ვერ ამტკიცებს საკუთარ ვაკანსიას
         if getattr(user, "user_type", "") == "employer" and not user.has_perm("core.can_approve_vacancies"):
@@ -967,7 +988,48 @@ class VacancyViewSet(viewsets.ModelViewSet):
             if not user.has_perm("core.can_approve_vacancies"):
                 validated.pop("is_approved", None)
 
-        serializer.save()    
+        vacancy = serializer.save()
+
+        # თუ Admin-მა ან დამსაქმებელმა ახალი პაკეტი მიუთითა → განვაახლოთ expiry_date
+        package = PurchasedService.objects.filter(
+            user=vacancy.employer.user,
+            is_active=True,
+            expiry_date__gte=timezone.now()
+        ).order_by("-expiry_date").first()
+
+        if package:
+            vacancy.expiry_date = timezone.now() + timezone.timedelta(days=package.service.duration_days)
+            vacancy.save()
+
+    @action(detail=False, methods=["get"], url_path="expired", permission_classes=[IsEmployer|IsAdmin])
+    def expired(self, request):
+        now = timezone.now()
+        user = request.user
+
+        if user.is_superuser:
+            qs = self.queryset.filter(expiry_date__lt=now, is_published=True).order_by("-expiry_date")
+        elif getattr(user, "user_type", "") == "employer":
+            qs = self.queryset.filter(expiry_date__lt=now, is_published=True, employer__user=user).order_by("-expiry_date")
+        else:
+            return Response({"detail": "მხოლოდ დამსაქმებელს ან ადმინს შეუძლია."}, status=403)
+
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="drafts", permission_classes=[IsEmployer|IsAdmin])
+    def drafts(self, request):
+        user = request.user
+
+        if user.is_superuser:
+            qs = self.queryset.filter(is_published=False).order_by("-published_date")
+        elif getattr(user, "user_type", "") == "employer":
+            qs = self.queryset.filter(is_published=False, employer__user=user).order_by("-published_date")
+        else:
+            return Response({"detail": "მხოლოდ დამსაქმებელს ან ადმინს შეუძლია."}, status=403)
+
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -1030,8 +1092,6 @@ def my_premium_vacancies(request):
 
     serializer = VacancySerializer(vacancies, many=True)
     return Response(serializer.data)
-
-# core/views.py
 
 def perform_create(self, serializer):
     user = self.request.user
@@ -1100,7 +1160,6 @@ def service_list(request):
     serializer = ServiceSerializer(services, many=True)
     return Response(serializer.data)
 
-
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def service_detail(request, pk):
@@ -1156,9 +1215,6 @@ def create_invoice_for_service(request, service_id):
         "user_email": invoice.user.email,
         })
 
-
-
-
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1187,9 +1243,6 @@ class ChangePasswordView(APIView):
         user.save()
         return Response({'success': 'პაროლი წარმატებით შეიცვალა.'})
     
-
-
-
 class RequestPasswordResetView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -1200,9 +1253,6 @@ class RequestPasswordResetView(APIView):
             return Response({"detail": "პაროლის აღდგენის ბმული გაიგზავნა ელფოსტაზე."})
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-
-
-
 class PasswordResetConfirmView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -1212,3 +1262,163 @@ class PasswordResetConfirmView(APIView):
             serializer.save()
             return Response({"detail": "პაროლი წარმატებით შეიცვალა."}, status=200)
         return Response(serializer.errors, status=400)
+
+
+
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsEmployer])
+def create_test_view(request, vacancy_id):
+    """
+    ქმნის Google Form-ს კონკრეტული ვაკანსიისთვის.
+    თუ ვაკანსიაზე ტესტი უკვე არსებობს:
+      - replace=false  → დააბრუნებს 409 ("უკვე არსებობს")
+      - replace=true   → იგივე Test ჩანაწერზე გადაიწერება form_id (და სურვილისამებრ წაიშლება ძველი შედეგები)
+    """
+    try:
+        vacancy = Vacancy.objects.get(id=vacancy_id, employer__user=request.user)
+    except Vacancy.DoesNotExist:
+        return Response({"error": "Vacancy not found or not yours"}, status=status.HTTP_404_NOT_FOUND)
+
+    data = request.data if isinstance(request.data, dict) else {}
+
+    title          = data.get("title") or f"Test for {vacancy.title}"
+    description    = data.get("description")
+    settings       = data.get("settings") or {}
+    items          = data.get("items") or []
+    replace        = bool(data.get("replace", False))          # <— მთავარი ფლაგი
+    drop_old_res   = bool(data.get("drop_old_results", False)) # სურვილისამებრ ძველი შედეგების წაშლა
+
+    # შექმენი ახალი Google Form (items/settings თუ გაქვს — batchUpdate-ით წაიყვანს)
+    if items or settings:
+        meta = create_form_with_items(
+            user=request.user,
+            title=title,
+            description=description,
+            collect_email=bool(settings.get("collect_email", True)),
+            is_quiz=bool(settings.get("is_quiz", True)),
+            items=items,
+        )
+    else:
+        meta = create_google_form(request.user, title=title, description=description)
+
+    if not meta:
+        return Response({"error": "Google Form creation failed"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # ვცდილობთ ვიპოვოთ არსებული Test ამ ვაკანსიაზე
+    try:
+        test = Test.objects.get(vacancy=vacancy, employer=request.user)
+
+        if not replace:
+            return Response(
+                {"error": "Test already exists for this vacancy. Pass replace=true to overwrite."},
+                status=status.HTTP_409_CONFLICT
+            )
+
+        old_form_id = test.form_id
+        test.form_id = meta["formId"]
+        test.title   = meta.get("title") or title
+        test.save(update_fields=["form_id", "title"])
+
+        if drop_old_res:
+            TestResult.objects.filter(test=test).delete()
+
+        return Response(
+            {
+                "test": TestSerializer(test).data,
+                "form_url": meta.get("responderUri"),
+                "replaced_old_form_id": old_form_id,
+                "note": "Existing Test updated to point to a new Google Form."
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Test.DoesNotExist:
+        # არ არსებობს — გავქმნათ პირველად
+        test = Test.objects.create(
+            vacancy=vacancy,
+            employer=request.user,
+            form_id=meta["formId"],
+            title=meta.get("title") or title,
+        )
+        return Response(
+            {"test": TestSerializer(test).data, "form_url": meta.get("responderUri")},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsEmployer])
+def get_test_results_view(request, vacancy_id):
+    try:
+        test = Test.objects.get(vacancy__id=vacancy_id, employer=request.user)
+    except Test.DoesNotExist:
+        return Response({"error": "Test not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    responses = get_form_responses(request.user, test.form_id) or []
+    results = []
+
+    for resp in responses:
+        response_id = resp.get("responseId")
+        if not response_id:
+            continue
+
+        # submitted_at awareness
+        submitted_raw = resp.get("lastSubmittedTime")
+        submitted_at = parse_datetime(submitted_raw) if submitted_raw else None
+        if submitted_at and timezone.is_naive(submitted_at):
+            submitted_at = timezone.make_aware(submitted_at, timezone.utc)
+
+        # normalize email
+        respondent_email = (resp.get("respondentEmail") or "").strip().lower() or None
+
+        total_score = resp.get("totalScore")
+        answers = resp.get("answers", {})
+
+        # upsert TestResult
+        result, created = TestResult.objects.get_or_create(
+            test=test,
+            response_id=response_id,
+            defaults={
+                "application": None,
+                "respondent_email": respondent_email,   
+                "answers": answers,
+                "total_score": total_score,
+                "submitted_at": submitted_at or timezone.now(),
+            },
+        )
+
+        changed = False
+   
+        if not created:
+            if respondent_email and result.respondent_email != respondent_email:
+                result.respondent_email = respondent_email
+                changed = True
+            if total_score is not None and result.total_score != total_score:
+                result.total_score = total_score
+                changed = True
+            if answers and result.answers != answers:
+                result.answers = answers
+                changed = True
+            if submitted_at and result.submitted_at != submitted_at:
+                result.submitted_at = submitted_at
+                changed = True
+
+
+        if respondent_email and result.application_id is None:
+            app = Application.objects.filter(
+                vacancy_id=vacancy_id,
+                job_seeker__email__iexact=respondent_email
+            ).first()
+            if app:
+                result.application = app
+                changed = True
+
+        if changed:
+            result.save()
+
+        results.append(result)
+
+
+    return Response(TestResultSerializer(results, many=True).data, status=status.HTTP_200_OK)

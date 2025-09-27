@@ -7,7 +7,7 @@ from django.utils.text import slugify
 from django.contrib.auth.models import Group
 from .validators import validate_cv_file, validate_video_file, validate_diploma_file
 
-
+from django.core.validators import FileExtensionValidator
 
 class User(AbstractUser):
     google_access_token = models.TextField(blank=True, null=True)
@@ -27,6 +27,7 @@ class User(AbstractUser):
     phone_number = models.CharField(max_length=20, unique=True, blank=True, null=True)
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    full_name = models.CharField(max_length=255, blank=True, null=True)
 
     groups = models.ManyToManyField(
         'auth.Group',
@@ -75,8 +76,24 @@ class EmployerProfile(models.Model):
     user = models.OneToOneField('User', on_delete=models.CASCADE, primary_key=True)
     company_name = models.CharField(max_length=255)
     contact_person = models.CharField(max_length=255)
+    phone_number = models.CharField(max_length=30, blank=True, null=True) 
     is_approved_by_admin = models.BooleanField(default=False)
-    
+    company_id_number = models.CharField(max_length=50, blank=True, null=True, unique=True)
+    profile_image = models.ImageField( 
+        upload_to="employers/profile_images/",
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"])]
+    )
+   
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_employers"
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+
     def __str__(self):
         return self.company_name
 
@@ -87,8 +104,16 @@ class JobSeekerProfile(models.Model):
         upload_to='cvs/', 
         blank=True, 
         null=True,
-        validators=[validate_cv_file]   # ✅ ვალიდატორი
+        validators=[validate_cv_file]  
     )
+
+    profile_image = models.ImageField(  # 🆕 პროფილის სურათი
+        upload_to="job_seekers/profile_images/",
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"])]
+    )
+
     video_resume = models.FileField(
         upload_to='video_resumes/',
         blank=True,
@@ -167,6 +192,8 @@ class Vacancy(models.Model):
     longitude = models.FloatField(null=True, blank=True)
     location_name = models.CharField(max_length=255, null=True, blank=True)
 
+    
+    
 
     def __str__(self):
         return self.title
@@ -341,4 +368,54 @@ class PreferredVacancy(Vacancy):
         proxy = True
         verbose_name = "სასურველი ვაკანსია"
         verbose_name_plural = "სასურველი ვაკანსიები"
+
+class Test(models.Model):
+    vacancy = models.OneToOneField(
+        Vacancy,
+        on_delete=models.CASCADE,
+        related_name="test"
+    )
+    employer = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        limit_choices_to={"user_type": "employer"}
+    )
+    form_id = models.CharField(max_length=255)   # Google Forms API formId
+    title = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Test for {self.vacancy.title}"
+
+
+
+
+class TestResult(models.Model):
+    test = models.ForeignKey(
+        Test,
+        on_delete=models.CASCADE,
+        related_name="results"
+    )
+    application = models.ForeignKey(
+        Application,
+        on_delete=models.CASCADE,
+        related_name="test_results",
+        null=True, blank=True   
+    )
+    respondent_email = models.EmailField(null=True, blank=True) 
+    response_id = models.CharField(max_length=255)  
+    answers = models.JSONField()  
+    total_score = models.FloatField(null=True, blank=True)  
+    submitted_at = models.DateTimeField()
+
+    class Meta:
+        unique_together = (("test", "response_id"),)  
+        indexes = [
+            models.Index(fields=["test", "response_id"]),
+            models.Index(fields=["application"]),
+            models.Index(fields=["respondent_email"]),
+        ]
+
+    def __str__(self):
+        return f"Result {self.response_id} for {self.application_id or '-'}"
 

@@ -15,7 +15,7 @@ from .views import (
     InvoiceViewSet, CategoryViewSet, LanguageViewSet,
     VacancyViewSet, ApplicationViewSet, MyProfileViewSet,
     my_vacancy_by_category_api,google_login_callback_json,
-    google_login_url,my_package_status,my_employer_profile,ChangePasswordView
+    google_login_url,my_package_status,my_employer_profile,ChangePasswordView,get_test_results_view,create_test_view
 )
 from . import calendar_views
 from .calendar_views import create_interview_meeting_view, interview_status_view
@@ -23,6 +23,8 @@ from core import views
 from .views import premium_vacancies
 from .views import my_premium_vacancies
 
+from rest_framework_simplejwt.views import TokenRefreshView
+from core.views import EmailTokenObtainPairView 
 
 from .views import create_invoice_for_service
 
@@ -55,6 +57,9 @@ urlpatterns = [
     path('profile/', UserProfileView.as_view(), name='user-profile'),
     path('profile/job_seeker/', JobSeekerProfileView.as_view(), name='job-seeker-profile'),
     path("me/employer-profile/", my_employer_profile, name="my-employer-profile"),
+
+    path("api/token/", EmailTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 
     path('auth/change-password/', ChangePasswordView.as_view(), name='change-password'),
     path("request-password-reset/", RequestPasswordResetView.as_view(), name="request-password-reset"),
@@ -93,7 +98,10 @@ urlpatterns = [
     path("auth/google/login-url/", google_login_url, name="google-login-url"),
     path("auth/google/callback-json/", google_login_callback_json, name="google-callback-json"),
     path("google-calendar/events/", calendar_views.google_calendar_events_view, name="google_calendar_events"),
+    path("tests/create/<int:vacancy_id>/", views.create_test_view, name="create-test"),
+    path("tests/<int:vacancy_id>/results/", views.get_test_results_view, name="test-results"),
+    
 
-    # Routers ALWAYS last
+    
     path('', include(router.urls)),
 ]

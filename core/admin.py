@@ -12,8 +12,9 @@ from .models import (
     User, EmployerProfile, Vacancy, Application, Service, PurchasedService,
     Invoice, Category, JobSeekerProfile, Language, WorkExperience, AdminProfile,
     MyVacancy,LanguageEntry,
-    Education, JobSeekerLanguage, Skill,SkillEntry
+    Education, JobSeekerLanguage, Skill,SkillEntry,Test, TestResult
 )
+
 
 from django.core.mail import send_mail
 from .admin_forms import VacancyAdminForm
@@ -33,6 +34,25 @@ LANGUAGE_LEVELS = [
     ("C1", "Advanced"),
     ("C2", "Proficient"),
 ]
+
+
+
+class TestResultInline(admin.TabularInline):
+    model = TestResult
+    extra = 0
+    readonly_fields = ["response_id", "respondent_email", "answers", "total_score", "submitted_at", "application"]
+
+
+@admin.register(Test)
+class TestAdmin(admin.ModelAdmin):
+    list_display = ("id", "vacancy", "employer", "form_id", "title", "created_at")
+    inlines = [TestResultInline]
+
+
+class TestInline(admin.StackedInline):
+    model = Test
+    extra = 0
+    readonly_fields = ["form_id", "title", "created_at"]
 
 
 
@@ -62,6 +82,7 @@ class CustomUserCreationForm(UserCreationForm):
     def save(self, commit=True):
         user = super().save(commit=False)
         full_name = self.cleaned_data.get("full_name", "") or ""
+        user.full_name = full_name
         parts = full_name.split(' ', 1)
         user.first_name = parts[0] if parts and parts[0] else ""
         user.last_name = parts[1] if len(parts) > 1 else ""
@@ -75,11 +96,12 @@ class CustomUserChangeForm(UserChangeForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance:
-            self.fields['full_name'].initial = f"{self.instance.first_name} {self.instance.last_name}".strip()
+            self.fields['full_name'].initial = (self.instance.full_name or "").strip()
 
     def save(self, commit=True):
         user = super().save(commit=False)
         full_name = self.cleaned_data.get("full_name", "") or ""
+        user.full_name = full_name 
         parts = full_name.split(' ', 1)
         user.first_name = parts[0] if parts and parts[0] else ""
         user.last_name = parts[1] if len(parts) > 1 else ""
@@ -131,8 +153,32 @@ class CustomUserAdmin(UserAdmin):
             return [AdminProfileInline(self.model, self.admin_site)]
         return []
 
-    def save_model(self, request, obj, form, change):
-        super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        """
+        აქ ვიჭერთ EmployerProfileInline-ის შენახვას User-ის გვერდიდან.
+        თუ is_approved_by_admin ამ წუთას გახდა True, ვავსებთ approved_by/approved_at ველებს.
+        """
+        instances = formset.save(commit=False)
+
+        for obj in instances:
+            if isinstance(obj, EmployerProfile):
+                # მოძებნე ძველი მნიშვნელობა, რომ შევამოწმოთ False→True გადასვლა
+                old = None
+                if obj.pk:
+                    try:
+                        old = EmployerProfile.objects.only('is_approved_by_admin').get(pk=obj.pk)
+                    except EmployerProfile.DoesNotExist:
+                        pass
+
+                if old and not old.is_approved_by_admin and obj.is_approved_by_admin:
+                    obj.approved_by = request.user
+                    obj.approved_at = timezone.now()
+
+            obj.save()
+
+        # M2M და delete დამუშავება
+        formset.save_m2m()
 
 
 # User profile inlines for User admin
@@ -147,8 +193,16 @@ class JobSeekerProfileInline(admin.StackedInline):
 
 class EmployerProfileInline(admin.StackedInline):
     model = EmployerProfile
+    fk_name = "user"  # ← აუცილებელია, რადგან მოდელში ახლა 2 FK/OneToOne არის User-ზე
     can_delete = False
     verbose_name_plural = 'Employer Profile'
+
+    # ← ეს გამორთავს dropdown-ს და კალენდარს: ტექსტად გამოჩნდება
+    readonly_fields = ('approved_by', 'approved_at')  
+
+    # ← ველები, რომლებიც უნდა ჩანდეს inline-ში (approved_* მხოლოდ წაკითხვადია)
+    fields = ('company_name', 'contact_person', 'phone_number','company_id_number',
+              'is_approved_by_admin', 'approved_by', 'approved_at')
 
 class AdminProfileInline(admin.StackedInline):
     model = AdminProfile
@@ -163,9 +217,23 @@ class AdminProfileAdmin(admin.ModelAdmin):
 
 @admin.register(EmployerProfile)
 class EmployerProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'company_name', 'is_approved_by_admin')
+    list_display = ('user', 'company_name', 'company_id_number','is_approved_by_admin', 'approved_by', 'approved_at')
     list_filter = ('is_approved_by_admin',)
-    search_fields = ('user__username', 'company_name')
+    search_fields = ('user__username', 'company_name', 'company_id_number')
+    readonly_fields = ('approved_by', 'approved_at') 
+    
+    def save_model(self, request, obj, form, change):
+        if change:
+            try:
+                old = EmployerProfile.objects.get(pk=obj.pk)
+            except EmployerProfile.DoesNotExist:
+                old = None
+
+            # False → True დამტკიცებისას ჩავწეროთ admin + დრო
+            if old and not old.is_approved_by_admin and obj.is_approved_by_admin:
+                obj.approved_by = request.user
+                obj.approved_at = timezone.now()
+        super().save_model(request, obj, form, change)
 
 # =========================
 class EducationInline(admin.TabularInline):
@@ -234,7 +302,7 @@ class JobSeekerProfileAdmin(admin.ModelAdmin):
         ('Preferences', {'fields': ('preferred_categories',)}),
     )
 
-    # ✅ აქ ჩავამატეთ
+    
     def has_view_permission(self, request, obj=None):
         if request.user.is_superuser:
             return True
@@ -296,7 +364,7 @@ class VacancyAdmin(admin.ModelAdmin):
     list_display  = ('title', 'employer', 'location', 'is_published', 'is_approved', 'published_date')
     list_filter   = ('is_published', 'is_approved', 'vacancy_type', 'category')
     search_fields = ('title', 'employer__company_name', 'location')
-    inlines       = [ApplicationInline]
+    inlines       = [ApplicationInline,TestInline]
     actions       = ("approve_vacancies", "reject_vacancies")
     form = VacancyAdminForm
 
@@ -451,6 +519,10 @@ class PurchasedServiceAdmin(admin.ModelAdmin):
         # თუ ახლა გახდა active და ადრე არ იყო active, გავუშვათ activate()
         if obj.is_active and was_inactive:
             obj.activate()
+
+
+
+
 
 admin.site.register(Invoice)
 

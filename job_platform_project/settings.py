@@ -2,10 +2,11 @@ import os
 from pathlib import Path
 from datetime import timedelta
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 
 from dotenv import load_dotenv
 import os
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv()
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
@@ -27,7 +28,7 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
 INSTALLED_APPS = [
-    # მესამე მხარე/აპები
+    
     'corsheaders',
     'rest_framework',
     'djoser',
@@ -36,17 +37,17 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'drf_yasg',
     'dj_rest_auth',
-    # google ით შესასვლელად
-    'django.contrib.sites',  # საჭიროა allauth-ისთვის
+    
+    'django.contrib.sites',  
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
 
-    # საკუთარი აპი
+    
     'core.apps.CoreConfig',
 
-    # Django core
+    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -56,10 +57,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # ძალიან ზემოთ
+    'corsheaders.middleware.CorsMiddleware',  
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'allauth.account.middleware.AccountMiddleware',  # დაამატე აქ
+    'allauth.account.middleware.AccountMiddleware',  
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -89,10 +90,16 @@ WSGI_APPLICATION = 'job_platform_project.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('DB_NAME', 'jobify_db'),
+        'USER': os.environ.get('DB_USER', 'jobify_user'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
     }
 }
+
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -142,7 +149,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_FILTER_BACKENDS': [
-        'django_filters.rest_framework.DjangoFilterBackend',  # ✅ დამატებულია
+        'django_filters.rest_framework.DjangoFilterBackend',  
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ],
@@ -165,11 +172,7 @@ SPECTACULAR_SETTINGS = {
             "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
         }
     },
-}
-
-# სანამ ტესტზეა ეს იყოს
-# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-# DEFAULT_FROM_EMAIL = "noreply@jobify.local"
+    }
 
 
 # ----------------------
@@ -207,3 +210,13 @@ ACCOUNT_DEFAULT_HTTP_REDIRECT_URL = '/accounts/login/'
 LOGIN_URL = '/accounts/login/'
 LOGIN_REDIRECT_URL = '/api/dashboard/'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/accounts/login/'
+
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "Asia/Tbilisi"
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"

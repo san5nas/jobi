@@ -13,10 +13,14 @@ from django.utils.timezone import get_current_timezone_name
 
 from typing import Tuple, Dict, Optional
 from django.utils import timezone
-# --- Scope-ები ---
+
+from googleapiclient.errors import HttpError
+
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/forms.body",
+    "https://www.googleapis.com/auth/forms.responses.readonly",
 ]
 
 REFRESH_SKEW = 300  # 5 წუთით ადრე განახლდეს access token
@@ -140,3 +144,285 @@ def get_event_attendance_status(user, event_id: str) -> Tuple[Dict[str, str], Op
     updated = ev.get("updated")
 
     return statuses, updated
+
+
+
+
+
+
+def create_google_form(user, title="Jobify Test", description=None):
+    """
+    ქმნის ახალ Google Form-ს user-ის სახელით.
+    create: მხოლოდ info.title
+    დანარჩენი (description და ა.შ.) → batchUpdate-ით.
+    აბრუნებს: {formId, responderUri, title}
+    """
+    creds = get_valid_google_credentials(user)
+    if not creds:
+        return None
+
+    try:
+        service = build("forms", "v1", credentials=creds)
+
+        # ✅ create-ზე მხოლოდ title შეიძლება
+        created = service.forms().create(
+            body={"info": {"title": title}}
+        ).execute()
+
+        form_id = created["formId"]
+
+        # (არჩევითი) description-ს ვამატებთ batchUpdate-ით
+        if description:
+            service.forms().batchUpdate(
+                formId=form_id,
+                body={
+                    "requests": [
+                        {
+                            "updateFormInfo": {
+                                "info": {"description": description},
+                                "updateMask": "description",
+                            }
+                        }
+                    ]
+                },
+            ).execute()
+
+        # ზოგჯერ responderUri create-ის პასუხში არაა -> ერთხელ წავიკითხოთ get-ით
+        meta = service.forms().get(formId=form_id).execute()
+        return {
+            "formId": form_id,
+            "responderUri": meta.get("responderUri"),
+            "title": meta["info"].get("title"),
+        }
+
+    except HttpError as error:
+        print(f"Forms API error: {error}")
+        return None
+
+
+# utils/google.py  (დაამატე create_google_form-ის ქვემოთ)
+
+def create_form_with_items(
+    user,
+    title: str,
+    description: str | None = None,
+    collect_email: bool = True,
+    is_quiz: bool = True,
+    items: list[dict] | None = None,
+):
+
+    creds = get_valid_google_credentials(user)
+    if not creds:
+        return None
+
+    service = build("forms", "v1", credentials=creds)
+
+    # 1) create → მხოლოდ title
+    created = service.forms().create(body={"info": {"title": title}}).execute()
+    form_id = created["formId"]
+
+    # 2) batchUpdate – settings + description + კითხვები
+    requests = []
+
+    if is_quiz:
+        requests.append({
+            "updateSettings": {
+                "settings": {"quizSettings": {"isQuiz": True}},
+                "updateMask": "quizSettings.isQuiz",
+            }
+        })
+    if collect_email:
+        requests.append({
+            "updateSettings": {
+                "settings": {"emailCollectionType": "RESPONDER_INPUT"},
+                "updateMask": "emailCollectionType",
+            }
+        })
+    if description:
+        requests.append({
+            "updateFormInfo": {
+                "info": {"description": description},
+                "updateMask": "description",
+            }
+        })
+
+    idx = 0
+    for it in (items or []):
+        t = (it.get("type") or "").lower()
+        title_i = it.get("title") or "Untitled"
+        required = bool(it.get("required", True))
+
+        if t == "short":
+            req = {
+                "createItem": {
+                    "item": {
+                        "title": title_i,
+                        "questionItem": {
+                            "question": {"required": required, "textQuestion": {}}
+                        }
+                    },
+                    "location": {"index": idx},
+                }
+            }
+        elif t == "mcq":
+            options = it.get("options") or []
+            q = {
+                "required": required,
+                "choiceQuestion": {
+                    "type": "RADIO",
+                    "options": [{"value": o} for o in options],
+                    "shuffle": False,
+                }
+            }
+            ci = it.get("correct_index")
+            if isinstance(ci, int) and 0 <= ci < len(options):
+                q["grading"] = {
+                    "pointValue": int(it.get("points", 1)),
+                    "correctAnswers": {"answers": [{"value": options[ci]}]},
+                }
+            req = {
+                "createItem": {
+                    "item": {"title": title_i, "questionItem": {"question": q}},
+                    "location": {"index": idx},
+                }
+            }
+        else:
+            continue
+
+        requests.append(req)
+        idx += 1
+
+    if requests:
+        service.forms().batchUpdate(formId=form_id, body={"requests": requests}).execute()
+
+    meta = service.forms().get(formId=form_id).execute()
+    return {
+        "formId": form_id,
+        "responderUri": meta.get("responderUri"),
+        "title": meta["info"].get("title"),
+    }
+
+
+
+
+def get_form_responses(user, form_id):
+    creds = get_valid_google_credentials(user)
+    if not creds:
+        return []
+
+    service = build("forms", "v1", credentials=creds)
+
+    all_responses = []
+    page_token = None
+    while True:
+        resp = service.forms().responses().list(
+            formId=form_id,
+            pageToken=page_token,
+            pageSize=500,
+        ).execute()
+        all_responses.extend(resp.get("responses", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+
+    return all_responses
+
+
+def enable_quiz(user, form_id: str, collect_email: bool = True):
+    """ჩართე Quiz და Email-ების შეგროვება."""
+    creds = get_valid_google_credentials(user)
+    if not creds:
+        return
+
+    service = build("forms", "v1", credentials=creds)
+
+    settings = {
+        "quizSettings": {"isQuiz": True}
+    }
+    update_mask = ["quizSettings.isQuiz"]
+
+    if collect_email:
+        
+        settings["emailCollectionType"] = "RESPONDER_INPUT"
+        update_mask.append("emailCollectionType")
+
+    service.forms().batchUpdate(
+        formId=form_id,
+        body={
+            "requests": [
+                {
+                    "updateSettings": {
+                        "settings": settings,
+                        "updateMask": ",".join(update_mask),
+                    }
+                }
+            ]
+        },
+    ).execute()
+
+
+
+def add_short_answer(user, form_id: str, title: str, required: bool = True, index: int = 0):
+    """დაამატე Short answer კითხვა."""
+    creds = get_valid_google_credentials(user)
+    service = build("forms", "v1", credentials=creds)
+    service.forms().batchUpdate(
+        formId=form_id,
+        body={
+            "requests": [
+                {
+                    "createItem": {
+                        "item": {
+                            "title": title,
+                            "questionItem": {
+                                "question": {
+                                    "required": required,
+                                    "textQuestion": {}
+                                }
+                            },
+                        },
+                        "location": {"index": index},
+                    }
+                }
+            ]
+        },
+    ).execute()
+
+
+def add_multiple_choice(user, form_id: str, title: str, options: list[str],
+                        correct_index: int | None = None, points: int = 1, index: int = 0):
+    """დაამატე Multiple Choice კითხვა; თუ correct_index გადმოგვეცა → ქულებიც დაეჯგუფება."""
+    creds = get_valid_google_credentials(user)
+    service = build("forms", "v1", credentials=creds)
+
+    item_question = {
+        "required": True,
+        "choiceQuestion": {
+            "type": "RADIO",
+            "options": [{"value": o} for o in options],
+            "shuffle": False,
+        },
+    }
+
+    if correct_index is not None and 0 <= correct_index < len(options):
+        item_question["grading"] = {
+            "pointValue": points,
+            "correctAnswers": {"answers": [{"value": options[correct_index]}]},
+        }
+
+    service.forms().batchUpdate(
+        formId=form_id,
+        body={
+            "requests": [
+                {
+                    "createItem": {
+                        "item": {
+                            "title": title,
+                            "questionItem": {"question": item_question},
+                        },
+                        "location": {"index": index},
+                    }
+                }
+            ]
+        },
+    ).execute()

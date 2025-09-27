@@ -18,6 +18,7 @@ from utils.email import send_password_reset_email
 from django.utils.http import urlsafe_base64_decode
 from django.utils.encoding import force_str
 
+from .models import Test, TestResult
 
 
 class SkillSerializer(serializers.ModelSerializer):
@@ -135,6 +136,7 @@ class JobSeekerProfileSerializer(serializers.ModelSerializer):
     education_entries = EducationSerializer(many=True, source="education_set", read_only=True)
     language_entries = LanguageEntrySerializer(many=True, source="languageentry_set", read_only=True)
     skill_entries = SkillEntrySerializer(many=True, source="skillentry_set", read_only=True)
+    profile_image = serializers.ImageField(required=False, allow_null=True)
 
     preferred_categories = serializers.PrimaryKeyRelatedField(
         many=True, queryset=Category.objects.all(), required=False
@@ -152,6 +154,7 @@ class JobSeekerProfileSerializer(serializers.ModelSerializer):
             "education_entries",
             "language_entries",
             "skill_entries",
+            "profile_image"
         )
 
 
@@ -164,17 +167,20 @@ class MyJobSeekerProfileSerializer(serializers.ModelSerializer):
     education_entries = EducationSerializer(many=True, required=False, source="educations")
     language_entries = LanguageEntrySerializer(many=True, required=False)
     skill_entries = SkillEntrySerializer(many=True, required=False)
+    profile_image = serializers.ImageField(required=False, allow_null=True, use_url=True)
 
     class Meta:
         model = JobSeekerProfile
         fields = [
             "user_id", "username", "email",
             "cv", "video_resume", "diploma_upload",
+            "profile_image",
             "preferred_categories",
             "work_experiences",
             "education_entries",
             "language_entries",
             "skill_entries",
+            
         ]
 
     def update(self, instance, validated_data):
@@ -237,25 +243,34 @@ class JobSeekerProfilePrivateSerializer(serializers.ModelSerializer):
 class EmployerProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmployerProfile
-        fields = '__all__'
+        fields = "__all__"
+class EmployerProfileNestedSerializer(serializers.ModelSerializer):
+    company_id_number = serializers.CharField(required=True, allow_blank=False)
+    class Meta:
+        model = EmployerProfile
+        fields = ["company_name", "contact_person", "phone_number","company_id_number"]
 # ---------- User serializer ----------
 class UserSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(
         required=True,
-        validators=[UniqueValidator(queryset=User.objects.all(), message="ამ ელფოსტით მომხმარებელი უკვე არსებობს.")]
+        validators=[UniqueValidator(
+            queryset=User.objects.all(),
+            message="ამ ელფოსტით მომხმარებელი უკვე არსებობს."
+        )]
     )
     username = serializers.CharField(required=False, allow_blank=True)
     password = serializers.CharField(write_only=True)
 
-    # პროფილები მხოლოდ წაკითხვისთვის დავტოვოთ (შექმნისას create() შექმნის)
+    full_name = serializers.CharField(required=False, allow_blank=False)
+
     job_seeker_profile = JobSeekerProfileSerializer(read_only=True)
-    employer_profile = EmployerProfileSerializer(read_only=True)
+    employer_profile = EmployerProfileNestedSerializer(required=False)
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'user_type',
-            'phone_number', 'password',
+            'phone_number', 'password', 'full_name',
             'job_seeker_profile', 'employer_profile'
         ]
         extra_kwargs = {"password": {"write_only": True}}
@@ -275,40 +290,65 @@ class UserSerializer(serializers.ModelSerializer):
         validate_password(value)
         return value
 
+    def validate(self, attrs):
+        """
+        სავალდებულო ველები რეგისტრაციისას:
+        - job_seeker → full_name
+        - employer → employer_profile.company_id_number
+        """
+        data = self.initial_data or {}
+        user_type = data.get('user_type')
+
+        if user_type == 'job_seeker':
+            fn = (data.get('full_name') or '').strip()
+            if not fn or ' ' not in fn:
+                raise serializers.ValidationError({
+                    'full_name': 'გთხოვთ შეიყვანოთ სრული სახელი (სახელი და გვარი), მაგ: "Aleksandre Goguadze".'
+                })
+
+        if user_type == 'employer':
+            ep = data.get('employer_profile') or {}
+            if not ep.get('company_id_number'):
+                raise serializers.ValidationError({
+                    'employer_profile.company_id_number': 'სავალდებულოა კომპანიის საიდენტიფიკაციო კოდი.'
+                })
+
+        return attrs
+
     def create(self, validated_data):
-        # request body-დან ამოვიღოთ პროფილის ველები
         employer_profile_data = self.initial_data.get("employer_profile", None)
-        job_seeker_profile_data = self.initial_data.get("job_seeker_profile", None)
 
         username = validated_data.get('username')
         email = validated_data.get('email')
         if not username or not username.strip():
             validated_data['username'] = self._generate_username_from_email(email)
 
-        # თვითონ User
+        # User
         user = User.objects.create_user(
             username=validated_data['username'],
             email=email,
             password=validated_data['password'],
             user_type=validated_data.get('user_type'),
-            phone_number=validated_data.get('phone_number')
+            phone_number=validated_data.get('phone_number'),
+            full_name=(self.initial_data.get('full_name') or '').strip()  # ➕ save full_name
         )
 
-        # EmployerProfile შექმნა
+        # EmployerProfile
         if user.user_type == "employer" and employer_profile_data:
             EmployerProfile.objects.update_or_create(
                 user=user,
                 defaults={
                     "company_name": employer_profile_data.get("company_name", ""),
-                    "contact_person": employer_profile_data.get("contact_person", user.username)
+                    "contact_person": employer_profile_data.get("contact_person", user.username),
+                    "phone_number": employer_profile_data.get("phone_number") or user.phone_number,
+                    "company_id_number": employer_profile_data.get("company_id_number"),  # ➕ save company_id_number
                 }
             )
 
-        # JobSeekerProfile შექმნა
+        # JobSeekerProfile
         if user.user_type == "job_seeker":
             JobSeekerProfile.objects.get_or_create(user=user)
 
-        # მთავარი: დავაბრუნოთ user პროფილებით ერთად
         return User.objects.select_related("employerprofile", "jobseekerprofile").get(id=user.id)
 
 
@@ -377,21 +417,35 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = '__all__'
 # ---- JWT Email Login Serializer ----
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework import serializers
+from .models import User  # 👈 შენი custom User მოდელი
+
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
-    # SimpleJWT-ს ვუთხრათ, რომ username-ის ნაცვლად email გამოიყენოს
-    username_field = 'email'
+    # ვუთხრათ, რომ username_field არის email
+    username_field = "email"
+
     def validate(self, attrs):
         data = super().validate(attrs)
-        
+
         if not self.user.is_verified:
             raise serializers.ValidationError("გთხოვთ, დაადასტუროთ თქვენი ელფოსტა.")
+
+        # 🔑 Custom payload
+        data.update({
+            "email": self.user.email,
+            "user_type": self.user.user_type,
+            "profile_image": (
+                self.user.jobseekerprofile.profile_image.url
+                if hasattr(self.user, "jobseekerprofile") and self.user.jobseekerprofile.profile_image
+                else (
+                    self.user.employerprofile.profile_image.url
+                    if hasattr(self.user, "employerprofile") and self.user.employerprofile.profile_image
+                    else None
+                )
+            )
+        })
         return data
-
-
-    class Meta:
-
-        model = AdminProfile
-        fields = '__all__'
 
 class AdminProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -451,3 +505,42 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     def save(self):
         self.user.set_password(self.validated_data["new_password"])
         self.user.save()
+
+
+
+class TestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Test
+        fields = ["id", "vacancy", "employer", "form_id", "title", "created_at"]
+        read_only_fields = ["id", "created_at", "employer"]
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            validated_data["employer"] = request.user
+        return super().create(validated_data)
+
+
+class TestResultSerializer(serializers.ModelSerializer):
+    applicant_email = serializers.EmailField(
+        source="application.job_seeker.email", read_only=True
+    )
+
+    class Meta:
+        model = TestResult
+        fields = (
+            "id",
+            "test",
+            "application",
+            "respondent_email",
+            "response_id",
+            "answers",
+            "total_score",
+            "submitted_at",
+            "applicant_email",          # ← დაამატე აქ
+        )
+        read_only_fields = ["id", "submitted_at", "applicant_email"]
+        extra_kwargs = {
+            "application": {"allow_null": True, "required": False}  # ← სურვილისამებრ, უსაფრთხოდ
+        }
+

@@ -22,6 +22,7 @@ from django.contrib.auth import get_user_model
 
 from core.models import Application
 from utils.google import create_google_meet_event
+from utils.google import SCOPES
 
 # ★★★ DRF + JWT ★★★
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
@@ -31,6 +32,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.signing import TimestampSigner, BadSignature
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
+
+
 
 def _is_valid_email(addr: str) -> bool:
     if not isinstance(addr, str):
@@ -47,10 +50,6 @@ def _is_valid_email(addr: str) -> bool:
 signer = TimestampSigner()
 
 BASE_DIR = settings.BASE_DIR
-SCOPES = [
-    'https://www.googleapis.com/auth/calendar.readonly',
-    'https://www.googleapis.com/auth/calendar.events'
-]
 CLIENT_SECRET_FILE = os.path.join(BASE_DIR, 'credentials.json')
 
 @api_view(["GET"])
@@ -65,10 +64,7 @@ def google_calendar_init_view(request):
 
     flow = Flow.from_client_secrets_file(
         os.path.join(settings.BASE_DIR, "credentials.json"),
-        scopes=[
-            "https://www.googleapis.com/auth/calendar.readonly",
-            "https://www.googleapis.com/auth/calendar.events",
-        ],
+        scopes=SCOPES,
         redirect_uri=settings.GOOGLE_CALENDAR_REDIRECT,
     )
 
@@ -77,7 +73,7 @@ def google_calendar_init_view(request):
         prompt="consent",
         access_type="offline",
         include_granted_scopes="true",
-        state=str(user.id),   # უბრალოდ user.id
+        state=str(user.id),   
     )
 
     return redirect(authorization_url)
@@ -105,10 +101,7 @@ def google_calendar_redirect_view(request):
 
     flow = Flow.from_client_secrets_file(
         os.path.join(settings.BASE_DIR, "credentials.json"),
-        scopes=[
-            "https://www.googleapis.com/auth/calendar.readonly",
-            "https://www.googleapis.com/auth/calendar.events",
-        ],
+        scopes=SCOPES,  
         redirect_uri=settings.GOOGLE_CALENDAR_REDIRECT,
     )
     flow.fetch_token(code=code)
@@ -119,7 +112,10 @@ def google_calendar_redirect_view(request):
     if credentials.refresh_token:
         user.google_refresh_token = credentials.refresh_token
     if getattr(credentials, "expiry", None):
-        user.google_token_expiry = credentials.expiry
+        expiry = credentials.expiry
+        if expiry and timezone.is_naive(expiry):
+            expiry = make_aware(expiry, dt_timezone.utc)
+        user.google_token_expiry = expiry
     user.save(update_fields=["google_access_token", "google_refresh_token", "google_token_expiry"])
 
     return JsonResponse({"detail": "Google Calendar connected ✅"})
