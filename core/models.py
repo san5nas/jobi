@@ -7,6 +7,8 @@ from django.utils.text import slugify
 from django.contrib.auth.models import Group
 from .validators import validate_cv_file, validate_video_file, validate_diploma_file
 
+from datetime import timedelta
+
 from django.core.validators import FileExtensionValidator
 
 class User(AbstractUser):
@@ -179,6 +181,7 @@ class Vacancy(models.Model):
     description = models.TextField()
     requirements = models.TextField()
     min_salary = models.DecimalField(max_digits=10, decimal_places=2)
+    max_salary = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     location = models.CharField(max_length=255)
     vacancy_type = models.CharField(max_length=20, choices=VACANCY_TYPES)
     is_premium = models.BooleanField(default=False)
@@ -187,7 +190,7 @@ class Vacancy(models.Model):
     rejection_reason = models.TextField(blank=True, null=True)
     published_date = models.DateTimeField(auto_now_add=True)
     expiry_date = models.DateTimeField(blank=True, null=True)
-    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='vacancies')
+    categories = models.ManyToManyField(Category, related_name='vacancies', blank=True)
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     location_name = models.CharField(max_length=255, null=True, blank=True)
@@ -418,4 +421,24 @@ class TestResult(models.Model):
 
     def __str__(self):
         return f"Result {self.response_id} for {self.application_id or '-'}"
+
+
+
+class PasswordResetPin(models.Model):
+    user = models.ForeignKey('core.User', on_delete=models.CASCADE)
+    pin = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    @classmethod
+    def create_for_user(cls, user):
+        import random
+        pin = f"{random.randint(100000, 999999)}"
+        expiry = timezone.now() + timedelta(minutes=15)
+        return cls.objects.create(user=user, pin=pin, expires_at=expiry)
+
+    def is_valid(self):
+        return timezone.now() <= self.expires_at
+    
+
 

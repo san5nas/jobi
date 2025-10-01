@@ -15,7 +15,8 @@ from .views import (
     InvoiceViewSet, CategoryViewSet, LanguageViewSet,
     VacancyViewSet, ApplicationViewSet, MyProfileViewSet,
     my_vacancy_by_category_api,google_login_callback_json,
-    google_login_url,my_package_status,my_employer_profile,ChangePasswordView,get_test_results_view,create_test_view
+    google_login_url,my_package_status,my_employer_profile,ChangePasswordView,get_test_results_view,create_test_view,
+    CustomLoginView, CookieTokenRefreshView, LogoutView
 )
 from . import calendar_views
 from .calendar_views import create_interview_meeting_view, interview_status_view
@@ -30,8 +31,10 @@ from .views import create_invoice_for_service
 
 from .views import service_list, service_detail
 
-from .views import RequestPasswordResetView
-from .views import PasswordResetConfirmView
+
+
+# from .views import request_password_reset_pin, reset_password_with_pin
+from .views_password_reset import PasswordResetRequestView, PasswordResetConfirmView
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
@@ -50,20 +53,23 @@ router.register(r'me/profile', MyProfileViewSet, basename='me-profile')
 urlpatterns = [
     # Static endpoints
     path('', api_root, name="api-root"),
-    path('login/', custom_login, name='login'),
-    path('api/login/', api_login, name='api_login'),
+    
+    
     path('register/', RegisterUserView.as_view(), name='register'),
     path('verify-email/', verify_email, name='verify-email'),
     path('profile/', UserProfileView.as_view(), name='user-profile'),
     path('profile/job_seeker/', JobSeekerProfileView.as_view(), name='job-seeker-profile'),
     path("me/employer-profile/", my_employer_profile, name="my-employer-profile"),
 
-    path("api/token/", EmailTokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    
+    path("login/", api_login, name="api_login"),
+    path("token/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
+    path('logout/', LogoutView.as_view(), name='logout'),
 
     path('auth/change-password/', ChangePasswordView.as_view(), name='change-password'),
-    path("request-password-reset/", RequestPasswordResetView.as_view(), name="request-password-reset"),
-    path("reset-password-confirm/", PasswordResetConfirmView.as_view(), name="reset-password-confirm"),
+
+    path("request-password-reset-pin/", PasswordResetRequestView.as_view(), name="request-password-reset-pin"),
+    path("reset-password-confirm-pin/", PasswordResetConfirmView.as_view(), name="reset-password-confirm-pin"),
 
     # Vacancy endpoints
     path('vacancies/my/', MyVacancyListView.as_view(), name='my-vacancies'),

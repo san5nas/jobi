@@ -72,7 +72,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 
 from .permissions import IsEmployer, IsAdmin, IsJobSeeker, CanEditVacancy, CanUpdateApplicationStatus
-from .utils import send_verification_email
+from utils.email import send_verification_email
 
 from rest_framework.permissions import IsAuthenticated
 from .permissions import ReadOnlyOrRole
@@ -81,10 +81,6 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 
-
-from .serializers import RequestPasswordResetSerializer
-
-from .serializers import PasswordResetConfirmSerializer
 
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
@@ -102,6 +98,15 @@ from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from .filters import VacancyFilter
+
+from rest_framework_simplejwt.views import TokenRefreshView
+
+from rest_framework_simplejwt.exceptions import InvalidToken
+
+
+from .utils.user_profile import get_user_profile_info
+
+from .models import PasswordResetPin
 
 signer = TimestampSigner()
 User = get_user_model()
@@ -428,35 +433,77 @@ def api_root(request):
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
 
-@csrf_exempt           
-@api_view(['POST'])
+
+
+class CookieTokenRefreshView(TokenRefreshView):
+    """
+    Refresh token იღებს HttpOnly Cookie-დან (refresh_token).
+    """
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.COOKIES.get("refresh_token")
+        if not refresh_token:
+            return Response({"detail": "No refresh token cookie"}, status=400)
+
+        try:
+            refresh = RefreshToken(refresh_token)
+            data = {
+                "access": str(refresh.access_token),
+            }
+            return Response(data)
+        except InvalidToken:
+            return Response({"detail": "Invalid refresh token"}, status=401)
+
+
+@csrf_exempt
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def api_login(request):
     """
-    API Login — გამოიყენე Postman-იდან:
-    POST /api/login/
-    Body (JSON): {"email": "...", "password": "..."}
-    Response: {"refresh": "...", "access": "..."}
+    Custom login:
+    - Authenticate user by email/password
+    - Set both access_token and refresh_token in HttpOnly cookies
+    - Return user info in JSON body
     """
     email = request.data.get('email')
     password = request.data.get('password')
     user = authenticate(request, username=email, password=password)
 
-    if user:
-        # დამატებული შემოწმება
-        if not user.is_verified:
-            return Response(
-                {"detail": "გთხოვთ, ჯერ დაადასტურეთ თქვენი ელფოსტა."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+    if not user:
+        return Response({"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            "refresh": str(refresh),
-            "access": str(refresh.access_token),
-        })
+    if not user.is_verified:
+        return Response({"detail": "გთხოვთ, ჯერ დაადასტურეთ თქვენი ელფოსტა."}, status=status.HTTP_403_FORBIDDEN)
 
-    return Response({"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+    # Generate tokens
+    refresh = RefreshToken.for_user(user)
+    access = str(refresh.access_token)
 
+    # Response JSON body – only user info (no tokens here)
+    response = Response({
+        "user": get_user_profile_info(user)
+    })
+
+    # Access token cookie
+    response.set_cookie(
+        key="access_token",
+        value=access,
+        httponly=True,
+        secure=False,  # True როცა HTTPS გაქვს
+        samesite="None",
+        max_age=5 * 60  # 5 minutes (access lifetime)
+    )
+
+    # Refresh token cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=str(refresh),
+        httponly=True,
+        secure=False,  # True როცა HTTPS გაქვს
+        samesite="None",
+        max_age=7 * 24 * 60 * 60  # 7 days
+    )
+
+    return response
 
 def custom_login(request):
     """
@@ -1151,7 +1198,7 @@ def my_package_status(request):
     })
 
 @api_view(["GET"])
-@permission_classes([AllowAny])  # ყველა შეძლებს ნახვას
+@permission_classes([AllowAny])  
 def service_list(request):
     """
     აბრუნებს ყველა ხელმისაწვდომ სერვისს (პაკეტს)
@@ -1243,28 +1290,6 @@ class ChangePasswordView(APIView):
         user.save()
         return Response({'success': 'პაროლი წარმატებით შეიცვალა.'})
     
-class RequestPasswordResetView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        serializer = RequestPasswordResetSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"detail": "პაროლის აღდგენის ბმული გაიგზავნა ელფოსტაზე."})
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-class PasswordResetConfirmView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        serializer = PasswordResetConfirmSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"detail": "პაროლი წარმატებით შეიცვალა."}, status=200)
-        return Response(serializer.errors, status=400)
-
-
-
 
 
 @api_view(["POST"])
@@ -1351,6 +1376,7 @@ def create_test_view(request, vacancy_id):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsEmployer])
 def get_test_results_view(request, vacancy_id):
+
     try:
         test = Test.objects.get(vacancy__id=vacancy_id, employer=request.user)
     except Test.DoesNotExist:
@@ -1422,3 +1448,65 @@ def get_test_results_view(request, vacancy_id):
 
 
     return Response(TestResultSerializer(results, many=True).data, status=status.HTTP_200_OK)
+
+
+
+class CustomLoginView(TokenObtainPairView):
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+
+        # Access და Refresh თოკენები
+        token_data = response.data
+        access_token = token_data.get("access")
+        refresh_token = token_data.get("refresh")
+
+        # წაშლა data-დან, თუ არ გინდა რომ body-შიც იყოს
+        response.data.pop("access", None)
+        response.data.pop("refresh", None)
+
+        # Cookie-ში ჩასმა
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=True,  # თუ HTTPS იყენებ
+            samesite="Lax",  # ან "None" თუ cross-site მოთხოვნებია საჭირო
+            max_age=3600  # 1 საათი მაგალითად
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            max_age=7 * 24 * 60 * 60  # Refresh token-ის ვადა (7 დღე)
+        )
+
+        return response
+    
+class CookieTokenRefreshView(TokenRefreshView):
+    def post(self, request, *args, **kwargs):
+        # Body-ის ნაცვლად ქუქიდან წამოიღე refresh token
+        request.data["refresh"] = request.COOKIES.get("refresh_token")
+        response = super().post(request, *args, **kwargs)
+
+        new_access_token = response.data.get("access")
+        response.data.pop("access", None)
+
+        response.set_cookie(
+            key="access_token",
+            value=new_access_token,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            max_age=3600
+        )
+
+        return response
+    
+class LogoutView(APIView):
+    def post(self, request):
+        response = Response()
+        response.delete_cookie('access_token')
+        response.delete_cookie('refresh_token')
+        return response

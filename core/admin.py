@@ -260,13 +260,18 @@ class JobSeekerLanguageInline(admin.TabularInline):
 
 class PreferredVacancyInline(admin.TabularInline):
     model = Vacancy
-    fields = ("title", "location", "employer", "category", "published_date", "is_published", "is_approved")
+    fields = ("title", "location", "employer", "published_date", "is_published", "is_approved")
+
     readonly_fields = fields
     can_delete = False
     extra = 0
     verbose_name = "სასურველი ვაკანსია"
     verbose_name_plural = "სასურველი ვაკანსიები"
     show_change_link = True  # ღილაკი რედაქტირებისთვის, სურვილისამებრ
+
+    def get_categories(self, obj):
+        return ", ".join([c.name for c in obj.categories.all()])
+    get_categories.short_description = "Categories"
 
     def get_queryset(self, request):
         # ყველა ვაკანსია თუ არ არის parent განვსაზღვრავთ
@@ -362,7 +367,8 @@ class ApplicationAdmin(admin.ModelAdmin):
 @admin.register(Vacancy)
 class VacancyAdmin(admin.ModelAdmin):
     list_display  = ('title', 'employer', 'location', 'is_published', 'is_approved', 'published_date')
-    list_filter   = ('is_published', 'is_approved', 'vacancy_type', 'category')
+    list_filter   = ('is_published', 'is_approved', 'vacancy_type', 'categories')
+    filter_horizontal = ('categories',)
     search_fields = ('title', 'employer__company_name', 'location')
     inlines       = [ApplicationInline,TestInline]
     actions       = ("approve_vacancies", "reject_vacancies")
@@ -472,8 +478,13 @@ class VacancyAdmin(admin.ModelAdmin):
 
 @admin.register(MyVacancy)
 class MyVacancyAdmin(admin.ModelAdmin):
-    list_display = ('title', 'location', 'is_published', 'published_date', 'category')
-    list_filter = ('category',)
+    list_display = ('title', 'location', 'is_published', 'published_date', 'get_categories')
+    list_filter = ('categories',)
+
+    def get_categories(self, obj):
+        return ", ".join([c.name for c in obj.categories.all()])
+    get_categories.short_description = "Categories"
+
     inlines = [ApplicationInline]
 
     def get_queryset(self, request):

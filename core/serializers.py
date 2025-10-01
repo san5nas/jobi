@@ -353,21 +353,32 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class VacancySerializer(serializers.ModelSerializer):
+    categories = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Category.objects.all()
+    )
+
     class Meta:
         model = Vacancy
         fields = [
             "id", "title", "description", "requirements",
-            "min_salary", "location", "location_name",
+            "min_salary","max_salary", "location", "location_name",
             "latitude", "longitude",
             "vacancy_type", "is_premium", "is_published", "is_approved",
             "published_date", "expiry_date",
-            "category", "employer"
+            "categories", "employer"
         ]
 
 class VacancyCreateSerializer(serializers.ModelSerializer):
+    categories = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Category.objects.all()
+    )
+
     class Meta:
         model = Vacancy
         exclude = ['employer', 'published_date']
+
 
 class ApplicationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -417,9 +428,6 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = '__all__'
 # ---- JWT Email Login Serializer ----
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework import serializers
-from .models import User  # 👈 შენი custom User მოდელი
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     # ვუთხრათ, რომ username_field არის email
@@ -451,61 +459,6 @@ class AdminProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdminProfile
         fields = '__all__'
-
-class RequestPasswordResetSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-
-    def validate_email(self, value):
-        if not User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("მომხმარებელი ასეთი ელფოსტით არ მოიძებნა.")
-        return value
-
-    def save(self):
-        email = self.validated_data["email"]
-        user = User.objects.get(email=email)
-
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
-
-        reset_link = f"https://jobify.ge/reset-password-confirm/?uid={uid}&token={token}"
-
-        context = {
-            "subject": "პაროლის აღდგენა",
-            "to": [user.email],
-            "template_name": "emails/password_reset.html",  # თუ გაქვს html template
-            "context": {
-                "user": user,
-                "reset_link": reset_link
-            },
-        }
-        send_password_reset_email(**context)
-
-class PasswordResetConfirmSerializer(serializers.Serializer):
-    uid = serializers.CharField()
-    token = serializers.CharField()
-    new_password = serializers.CharField(write_only=True)
-    confirm_new_password = serializers.CharField(write_only=True)
-
-    def validate(self, attrs):
-        try:
-            uid = force_str(urlsafe_base64_decode(attrs['uid']))
-            user = User.objects.get(pk=uid)
-        except (User.DoesNotExist, ValueError, TypeError, OverflowError):
-            raise serializers.ValidationError({"uid": "მომხმარებელი ვერ მოიძებნა."})
-
-        if not default_token_generator.check_token(user, attrs["token"]):
-            raise serializers.ValidationError({"token": "ტოკენი არასწორია ან ვადაგასულია."})
-
-        if attrs["new_password"] != attrs["confirm_new_password"]:
-            raise serializers.ValidationError({"confirm_new_password": "პაროლები არ ემთხვევა."})
-
-        self.user = user
-        return attrs
-
-    def save(self):
-        self.user.set_password(self.validated_data["new_password"])
-        self.user.save()
-
 
 
 class TestSerializer(serializers.ModelSerializer):

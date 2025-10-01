@@ -191,9 +191,20 @@ ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'aleksandregoguadze@gmail.com')
 FRONTEND_HOST = os.environ.get('FRONTEND_HOST', 'http://127.0.0.1:8000')
 
 # CORS/CSRF (dev-friendly)
-CORS_ALLOW_ALL_ORIGINS = True
-CSRF_TRUSTED_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000']
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 SITE_ID = 2   # django.contrib.sites-ისთვის
 
 AUTHENTICATION_BACKENDS = [
