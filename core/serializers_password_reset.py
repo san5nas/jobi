@@ -28,7 +28,6 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
-    pin = serializers.CharField(max_length=6)
     new_password = serializers.CharField(write_only=True)
     new_password2 = serializers.CharField(write_only=True)
 
@@ -37,22 +36,30 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             raise serializers.ValidationError("Passwords do not match")
         return data
 
+    def save(self, **kwargs):
+        user = self.context.get("user")
+        if not user:
+            raise serializers.ValidationError("User context missing")
+
+        new_password = self.validated_data["new_password"]
+        user.set_password(new_password)
+        user.save()
+        return user
+
+class PasswordResetVerifyPinSerializer(serializers.Serializer):
+    pin = serializers.CharField(max_length=6)
+
     def validate_pin(self, value):
         if not value.isdigit() or len(value) != 6:
             raise serializers.ValidationError("Invalid PIN format")
+
+        from .models import PasswordResetPin
+        reset_obj = PasswordResetPin.objects.filter(pin=value).first()
+        if not reset_obj or not reset_obj.is_valid():
+            raise serializers.ValidationError("Invalid or expired PIN")
+        self.context["reset_obj"] = reset_obj
         return value
 
-    def save(self, **kwargs):
-        pin = self.validated_data["pin"]
-        new_password = self.validated_data["new_password"]
-
-        # ვპოულობთ PIN-ს DB-ში
-        reset_obj = PasswordResetPin.objects.filter(pin=pin).first()
-        if not reset_obj or not reset_obj.is_valid():
-            raise serializers.ValidationError({"pin": "Invalid or expired PIN"})
-
-        user = reset_obj.user
-        user.set_password(new_password)
-        user.save()
-        reset_obj.delete()  # ერთხელ გამოყენების შემდეგ წავშალოთ
-        return user
+    @property
+    def validated_reset(self):
+        return self.context.get("reset_obj")

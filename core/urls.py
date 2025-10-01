@@ -34,7 +34,7 @@ from .views import service_list, service_detail
 
 
 # from .views import request_password_reset_pin, reset_password_with_pin
-from .views_password_reset import PasswordResetRequestView, PasswordResetConfirmView
+from .views_password_reset import PasswordResetRequestView, PasswordResetConfirmView ,PasswordResetVerifyPinView
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
@@ -69,6 +69,8 @@ urlpatterns = [
     path('auth/change-password/', ChangePasswordView.as_view(), name='change-password'),
 
     path("request-password-reset-pin/", PasswordResetRequestView.as_view(), name="request-password-reset-pin"),
+    path("verify-password-reset-pin/", PasswordResetVerifyPinView.as_view(), name="verify-password-reset-pin"),
+
     path("reset-password-confirm-pin/", PasswordResetConfirmView.as_view(), name="reset-password-confirm-pin"),
 
     # Vacancy endpoints
